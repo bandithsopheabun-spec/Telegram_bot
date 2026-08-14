@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: blessingkh-telegram-bot-web
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: PORT
+        value: 10000
+      - key: SUPPORT_LINK
+        value: '@Blessing_Kh_Supports'

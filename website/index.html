@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="km">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Blessing.Kh - SMM Services & WebApp Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kantumruuy+Pro:ital,wght@0,300..700;1,300..700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- QRCode Generator Library -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Top Navigation -->
+        <header class="navbar">
+            <div class="brand">
+                <div class="brand-logo">✨</div>
+                <div class="brand-info">
+                    <span class="brand-name">Blessing.Kh</span>
+                    <span class="brand-tag">SMM VIP System</span>
+                </div>
+            </div>
+
+            <div class="user-widgets">
+                <div class="balance-pill" id="balancePill">
+                    <span class="balance-icon">👛</span>
+                    <span class="balance-amount" id="userBalance">$0.00</span>
+                    <button class="btn-add-funds" id="btnOpenDeposit">+ ថែមលុយ</button>
+                </div>
+                <button class="lang-btn" id="btnToggleLang">🇰🇭 KM</button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- User Status & Banner -->
+            <section class="user-card">
+                <div class="user-card-header">
+                    <div class="user-avatar" id="userAvatar">👤</div>
+                    <div class="user-details">
+                        <div class="user-name-row">
+                            <h2 class="user-display-name" id="userName">Guest Customer</h2>
+                            <span class="rank-badge" id="userRank">🥉 Bronze Member</span>
+                        </div>
+                        <p class="user-id-text">ID: <code id="userId">Guest-1001</code> | 🟢 <span id="statusText">Online 24/7 (ស្វ័យប្រវត្តិ)</span></p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Navigation Tabs -->
+            <nav class="nav-tabs">
+                <button class="tab-btn active" data-tab="tab-order">
+                    <span class="tab-icon">🛒</span>
+                    <span class="tab-label">បញ្ជាទិញសេវា</span>
+                </button>
+                <button class="tab-btn" data-tab="tab-deposit">
+                    <span class="tab-icon">💳</span>
+                    <span class="tab-label">បញ្ចូលលុយ KHQR</span>
+                </button>
+                <button class="tab-btn" data-tab="tab-history">
+                    <span class="tab-icon">📅</span>
+                    <span class="tab-label">ប្រវត្តិទិញ</span>
+                </button>
+                <button class="tab-btn" data-tab="tab-support">
+                    <span class="tab-icon">💬</span>
+                    <span class="tab-label">ជំនួយ & Admin</span>
+                </button>
+            </nav>
+
+            <!-- TAB 1: ORDER SERVICES -->
+            <section class="tab-content active" id="tab-order">
+                <!-- Platform Selection Cards -->
+                <div class="section-title">
+                    <h3>1. ជ្រើសរើសបណ្តាញសង្គម (Choose Platform)</h3>
+                </div>
+                <div class="platform-grid">
+                    <div class="platform-card active" data-platform="tiktok">
+                        <div class="platform-icon">🎵</div>
+                        <div class="platform-title">TikTok Khmer</div>
+                        <div class="platform-sub">ខ្មែរសុទ្ធ 100%</div>
+                    </div>
+                    <div class="platform-card" data-platform="telegram">
+                        <div class="platform-icon">✈️</div>
+                        <div class="platform-title">Telegram</div>
+                        <div class="platform-sub">Member & Views</div>
+                    </div>
+                    <div class="platform-card" data-platform="facebook">
+                        <div class="platform-icon">📘</div>
+                        <div class="platform-title">Facebook</div>
+                        <div class="platform-sub">Page Likes & Views</div>
+                    </div>
+                </div>
+
+                <!-- Category Selection -->
+                <div class="section-title">
+                    <h3>2. ជ្រើសរើសប្រភេទសេវាកម្ម (Select Category)</h3>
+                </div>
+                <div class="category-selector" id="categorySelector">
+                    <!-- Populated dynamically via JS -->
+                </div>
+
+                <!-- Order Config Form -->
+                <div class="order-box">
+                    <div class="section-title">
+                        <h3>3. ជ្រើសរើសកញ្ចប់តម្លៃ & លីង (Package & Link)</h3>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">ជ្រើសរើសកញ្ចប់ (Package):</label>
+                        <select class="form-select" id="packageSelect">
+                            <!-- Options populated dynamically -->
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" id="linkInputLabel">ដាក់លីង (Target Link):</label>
+                        <input type="url" class="form-input" id="targetLinkInput" placeholder="https://www.tiktok.com/@username/video/..." required>
+                        <span class="form-hint" id="linkHint">សូមប្រាកដថា Account ឬ Video របស់អ្នកកំណត់ជា Public</span>
+                    </div>
+
+                    <!-- Order Summary Box -->
+                    <div class="summary-card">
+                        <div class="summary-row">
+                            <span>កញ្ចប់ដែលជ្រើសរើស ៖</span>
+                            <strong id="sumPackageName">--</strong>
+                        </div>
+                        <div class="summary-row">
+                            <span>តម្លៃសរុប (Total Price) ៖</span>
+                            <strong class="price-tag" id="sumPrice">$0.00 USD</strong>
+                        </div>
+                        <div class="summary-row">
+                            <span>តុល្យភាពរបស់អ្នក ៖</span>
+                            <span id="sumBalance">$0.00 USD</span>
+                        </div>
+                    </div>
+
+                    <div class="alert-banner hidden" id="balanceWarning">
+                        ⚠️ តុល្យភាពរបស់អ្នកមិនគ្រប់គ្រាន់ឡើយ! សូមចុច "បញ្ចូលលុយ KHQR" ដើម្បីបន្ត។
+                    </div>
+
+                    <button class="btn-submit-order" id="btnSubmitOrder">
+                        ⚡ បញ្ជាទិញឥឡូវនេះ (Submit Order)
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB 2: DEPOSIT KHQR -->
+            <section class="tab-content" id="tab-deposit">
+                <div class="deposit-box">
+                    <div class="section-title">
+                        <h3>💳 បញ្ចូលលុយតាម Bakong / ACLEDA KHQR (Auto-Paid)</h3>
+                    </div>
+                    <p class="deposit-desc">បញ្ចូលទឹកប្រាក់ចូលកាបូបលុយរបស់អ្នកភ្លាមៗ ដោយស្វ័យប្រវត្តិ ១០០% មិនបាច់រង់ចាំ!</p>
+
+                    <div class="quick-amounts">
+                        <button class="amount-btn active" data-amount="1.99">$1.99</button>
+                        <button class="amount-btn" data-amount="3.00">$3.00</button>
+                        <button class="amount-btn" data-amount="5.00">$5.00</button>
+                        <button class="amount-btn" data-amount="10.00">$10.00</button>
+                        <button class="amount-btn" data-amount="20.00">$20.00</button>
+                        <button class="amount-btn" data-amount="50.00">$50.00</button>
+                    </div>
+
+                    <div class="form-group margin-top">
+                        <label class="form-label">ឬបញ្ចូលចំនួនទឹកប្រាក់ផ្សេងទៀត ($ USD):</label>
+                        <input type="number" step="0.5" min="1" class="form-input" id="customAmountInput" value="1.99">
+                    </div>
+
+                    <button class="btn-generate-qr" id="btnGenerateQr">
+                        ✨ បង្កើត Bakong KHQR Code
+                    </button>
+
+                    <!-- KHQR Display Area -->
+                    <div class="qr-display-card hidden" id="qrCard">
+                        <div class="khqr-badge">Bakong KHQR</div>
+                        <div class="qr-canvas-wrapper">
+                            <canvas id="qrCanvas"></canvas>
+                        </div>
+                        <div class="qr-amount-label" id="qrAmountLabel">$1.99 USD</div>
+                        <p class="qr-timer">⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...</p>
+                        <button class="btn-sim-pay" id="btnSimulatePay">⚡ សាកល្បងទូទាត់ជោគជ័យ (Test Auto-Pay)</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: ORDER HISTORY -->
+            <section class="tab-content" id="tab-history">
+                <div class="section-title">
+                    <h3>📅 ប្រវត្តិបញ្ជាទិញ (Order History)</h3>
+                </div>
+                <div class="history-list" id="historyList">
+                    <!-- Dynamic order rows -->
+                </div>
+            </section>
+
+            <!-- TAB 4: SUPPORT & ADMIN -->
+            <section class="tab-content" id="tab-support">
+                <div class="support-card">
+                    <div class="support-icon">💬</div>
+                    <h3>ជំនួយ & ទំនាក់ទំនង Admin</h3>
+                    <p>ប្រសិនបើមានចម្ងល់ ឬបញ្ហាក្នុងការបញ្ជាទិញ សូមទាក់ទងមកកាន់ Admin យើងខ្ញុំ 24/7 ៖</p>
+                    <div class="support-links">
+                        <a href="https://t.me/Blessing_Kh_Supports" target="_blank" class="support-btn">
+                            ✈️ Contact Telegram Admin (@Blessing_Kh_Supports)
+                        </a>
+                        <a href="https://t.me/Blessing_Kh_Public/3" target="_blank" class="support-btn secondary">
+                            📢 Official Telegram Channel
+                        </a>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Notification Toast -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

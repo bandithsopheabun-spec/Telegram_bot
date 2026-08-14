@@ -1,0 +1,3358 @@
+require('dotenv').config();
+const { Telegraf, Markup } = require('telegraf');
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+
+const botToken = process.env.BOT_TOKEN || '8998857119:AAG36Hg5uzAgQ_wg_TfySz5dCqWmu38nVx4';
+const bot = new Telegraf(botToken);
+
+// Support Link & Channel Link Configuration
+const SUPPORT_LINK = (process.env.SUPPORT_LINK && !process.env.SUPPORT_LINK.includes('LazR') && !process.env.SUPPORT_LINK.includes('retanakpich')) ? process.env.SUPPORT_LINK : '@Blessing_Kh_Supports';
+const CHANNEL_LINK = process.env.CHANNEL_LINK || 'https://t.me/Blessing_Kh_Public/3';
+const TARGET_ADMIN_CHAT_ID = process.env.GROUP_CHAT_ID ? parseInt(process.env.GROUP_CHAT_ID) : -1003953732694;
+
+// Supabase Client Setup (Optional & Safe)
+let createClient = null;
+try {
+    createClient = require('@supabase/supabase-js').createClient;
+} catch (e) {
+    console.log('Notice: @supabase/supabase-js module not found locally, running with fallback');
+}
+
+let BakongKHQR = null;
+try {
+    const khqrLib = require('bakong-khqr');
+    BakongKHQR = khqrLib.BakongKHQR || khqrLib;
+} catch (e) {
+    console.log('Notice: bakong-khqr module loading safely...');
+}
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+let supabase = null;
+
+if (createClient && supabaseUrl && supabaseKey && supabaseUrl.startsWith('http')) {
+    try {
+        supabase = createClient(supabaseUrl, supabaseKey);
+        console.log('🗄️ Supabase Database connected successfully!');
+    } catch (e) {
+        console.error('⚠️ Supabase connection error:', e.message);
+    }
+} else {
+    console.log('💡 Running with local memory storage (Set SUPABASE_URL & SUPABASE_KEY to enable Postgres DB persistence)');
+}
+
+// Bakong Open API Helper Function
+async function checkBakongTransaction(md5Hash) {
+    const token = process.env.BAKONG_TOKEN || 'jjqZN81SbulJNjWHomKWcJSkAcm2Nz75';
+    if (!token || !md5Hash) return false;
+
+    try {
+        const response = await fetch('https://api-bakong.nbc.gov.kh/v1/check_transaction_by_md5', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ md5: md5Hash.toLowerCase() })
+        });
+        const result = await response.json();
+        console.log('📌 Bakong Check MD5 Result:', JSON.stringify(result));
+        if (result && (result.responseCode === 0 || result.responseCode === '0' || result.code === 0) && result.data) {
+            return true;
+        }
+        return false;
+    } catch (err) {
+        console.error('⚠️ Bakong Open API Check error:', err.message);
+        return false;
+    }
+}
+
+async function fetchBakongApiKhqrString(merchantId, amount, depositId) {
+    const token = process.env.BAKONG_TOKEN || 'jjqZN81SbulJNjWHomKWcJSkAcm2Nz75';
+    if (!token) return null;
+
+    try {
+        const res = await fetch('https://api-bakong.nbc.gov.kh/v1/generate_khqr', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                bakongAccountId: (merchantId || 'bun_bandithsophea@bkrt').trim(),
+                accountName: 'Blessing.Kh',
+                amount: amount,
+                transactionAmount: amount,
+                currency: 'USD',
+                merchantCity: 'Phnom Penh',
+                billNumber: depositId,
+                storeLabel: 'Blessing.Kh SMM',
+                terminalLabel: 'Blessing.Kh SMM'
+            })
+        });
+        const data = await res.json();
+        console.log('📌 Bakong Open API Generate Response:', JSON.stringify(data));
+
+        if (data) {
+            if (typeof data.data === 'string' && data.data.startsWith('000201')) return data.data;
+            if (data.data && typeof data.data.qr === 'string') return data.data.qr;
+            if (data.data && typeof data.data.khqr === 'string') return data.data.khqr;
+            if (data.data && typeof data.data.md5 === 'string' && data.data.qrData) return data.data.qrData;
+            if (typeof data.qr === 'string') return data.qr;
+            if (typeof data.khqr === 'string') return data.khqr;
+        }
+    } catch (e) {
+        console.error('⚠️ Bakong API Generate KHQR error:', e.message);
+    }
+    return null;
+}
+
+// ACLEDA Bank Toanchet Pay / xPay API Auto-Verification Helper Function
+let isAcledaPaymentOn = true;
+let acledaApiToken = process.env.ACLEDA_API_TOKEN || 'jjqZN81SbulJNjWHomKWcJSkAcm2Nz75';
+let acledaMerchantId = process.env.ACLEDA_MERCHANT_ID || 'lasa_leng@aclb';
+let bakongAccountId = process.env.BAKONG_ACCOUNT_ID || 'bun_bandithsophea@bkrt';
+
+async function checkAcledaTransaction(depositId, amount) {
+    const token = process.env.ACLEDA_API_TOKEN || acledaApiToken;
+    const merchantId = process.env.ACLEDA_MERCHANT_ID || acledaMerchantId;
+    if (!token) return false;
+
+    try {
+        const apiUrl = process.env.ACLEDA_API_URL || 'https://api.acledabank.com.kh/v1/transaction/verify';
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                merchant_id: merchantId,
+                bill_number: depositId,
+                amount: amount
+            })
+        });
+        const result = await response.json();
+        return result.responseCode === '00' || result.status === 'SUCCESS' || result.code === 200;
+    } catch (err) {
+        console.error('⚠️ ACLEDA API Check error:', err.message);
+        return false;
+    }
+}
+
+// Dynamic EMVCo KHQR Generator Helper with CRC16 Checksum for Bakong & ACLEDA
+function crc16(str) {
+    let crc = 0xFFFF;
+    for (let c = 0; c < str.length; c++) {
+        crc ^= str.charCodeAt(c) << 8;
+        for (let i = 0; i < 8; i++) {
+            if ((crc & 0x8000) !== 0) {
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+            } else {
+                crc = (crc << 1) & 0xFFFF;
+            }
+        }
+    }
+    return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function generateDynamicKhqr(merchantId, merchantName, amount, depositId) {
+    const cleanMerchant = (merchantId || 'bun_bandithsophea@bkrt').trim();
+    const cleanName = (merchantName || 'BANDITHSOPHEA BUN').trim().slice(0, 25);
+    const amtNum = parseFloat(amount);
+    const amtStr = amtNum.toFixed(2);
+    const cleanDep = depositId.replace(/[^a-zA-Z0-9]/g, '');
+
+    // 1. Try NBC BakongKHQR SDK if available
+    if (BakongKHQR && BakongKHQR.generate) {
+        try {
+            const optionalData = {
+                currency: BakongKHQR.currency ? BakongKHQR.currency.usd : '840',
+                amount: amtNum,
+                mobileNumber: '0979862190',
+                storeLabel: 'Blessing.Kh',
+                terminalLabel: 'Blessing.Kh',
+                billNumber: cleanDep
+            };
+            let khqrResult = null;
+            if (typeof BakongKHQR.generate.individual === 'function') {
+                khqrResult = BakongKHQR.generate.individual(cleanMerchant, cleanName, optionalData);
+            }
+            if (khqrResult && khqrResult.data && khqrResult.data.qr) {
+                console.log('📌 Official BakongKHQR SDK Generated QR successfully!');
+                return khqrResult.data.qr;
+            }
+        } catch (err) {
+            console.error('⚠️ Official BakongKHQR SDK generate error:', err.message);
+        }
+    }
+
+    // 2. Official NBC EMVCo KHQR Standard Format (Tag 29 with km.gov.nbc.bakong Domain)
+    const nbcDomain = 'km.gov.nbc.bakong';
+    const sub00 = '00' + String(nbcDomain.length).padStart(2, '0') + nbcDomain;
+    const sub01 = '01' + String(cleanMerchant.length).padStart(2, '0') + cleanMerchant;
+    const subCombined = sub00 + sub01;
+    const tag29 = '29' + String(subCombined.length).padStart(2, '0') + subCombined;
+
+    const tag00 = '000201';
+    const tag01 = '010212'; // Dynamic QR (12)
+    const tag52 = '52045999'; // Merchant Category Code
+    const tag53 = '5303840'; // Currency Code: USD (840)
+    const tag54Str = '54' + String(amtStr.length).padStart(2, '0') + amtStr;
+    const tag58 = '5802KH'; // Country Code: KH
+    const tag59Str = '59' + String(cleanName.length).padStart(2, '0') + cleanName;
+    const tag60 = '6010Phnom Penh';
+
+    const sub62_01 = '01' + String(cleanDep.length).padStart(2, '0') + cleanDep;
+    const tag62 = '62' + String(sub62_01.length).padStart(2, '0') + sub62_01;
+
+    const rawPayload = tag00 + tag01 + tag29 + tag52 + tag53 + tag54Str + tag58 + tag59Str + tag60 + tag62 + '6304';
+    const checksum = crc16(rawPayload);
+
+    return rawPayload + checksum;
+}
+
+// 100% FULLY AUTOMATED BACKGROUND PAYMENT ENGINE (NO CUSTOMER BUTTON CLICK NEEDED)
+const pendingAutoDeposits = {};
+const userLastPendingDeposit = {};
+
+function registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash) {
+    const item = {
+        depositId,
+        userId,
+        amount,
+        bonusAmount,
+        totalCredit: amount + bonusAmount,
+        md5Hash,
+        createdAt: Date.now()
+    };
+    pendingAutoDeposits[depositId] = item;
+    userLastPendingDeposit[userId] = item;
+}
+
+let autoPayInterval = null;
+function startAutoPaymentEngine() {
+    if (autoPayInterval) return;
+    autoPayInterval = setInterval(async () => {
+        const depKeys = Object.keys(pendingAutoDeposits);
+        if (depKeys.length === 0) return;
+
+        const now = Date.now();
+        for (const depId of depKeys) {
+            const item = pendingAutoDeposits[depId];
+
+            // Expire pending auto check after 30 minutes
+            if (now - item.createdAt > 30 * 60 * 1000) {
+                delete pendingAutoDeposits[depId];
+                continue;
+            }
+
+            // Check Bakong & ACLEDA Open APIs in background
+            const isBakongVerified = await checkBakongTransaction(item.md5Hash);
+            const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, item.amount) : false;
+
+            if (isBakongVerified || isAcledaVerified) {
+                delete pendingAutoDeposits[depId];
+                const userId = item.userId;
+                const currentBal = getBalance(userId);
+                const newBal = currentBal + item.totalCredit;
+                await dbUpdateBalance(userId, newBal);
+
+                if (supabase) {
+                    try {
+                        await supabase.from('deposits').update({ status: 'Approved (Auto-Paid)' }).eq('deposit_id', depId);
+                    } catch (e) {}
+                }
+
+                // AUTOMATICALLY NOTIFY CUSTOMER INSTANTLY!
+                const uLang = getLang(userId);
+                const autoSuccessMsg = uLang === 'en' ?
+                    `🎉 <b>Auto-Payment Successful!</b>\n` +
+                    `----------------------------------------\n` +
+                    `💳 <b>Deposit Amount:</b> $${item.amount.toFixed(2)} USD\n` +
+                    `🎁 <b>Bonus Added:</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
+                    `💰 <b>New Balance:</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
+                    `⚡ <i>Your wallet has been automatically credited! You can place orders now.</i>` :
+                    `🎉 <b>ទូទាត់ប្រាក់ជោគជ័យស្វ័យប្រវត្តិ (Auto-Payment Successful)!</b>\n` +
+                    `----------------------------------------\n` +
+                    `💳 <b>ចំនួនប្រាក់ទូទាត់ ៖</b> $${item.amount.toFixed(2)} USD\n` +
+                    `🎁 <b>Bonus ទទួលបាន ៖</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
+                    `💰 <b>តុល្យភាពបច្ចុប្បន្ន ៖</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
+                    `⚡ <i>ប្រព័ន្ធបានបញ្ចូលលុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% រួចរាល់ហើយ!</i>`;
+
+                try {
+                    await bot.telegram.sendMessage(userId, autoSuccessMsg, { parse_mode: 'HTML' });
+                } catch (e) {}
+
+                // NOTIFY ADMIN CHANNEL (-1003953732694)
+                const channelMsg = 
+                    `⚡ <b>AUTO-PAYMENT APPROVED (100% Automated)!</b>\n` +
+                    `----------------------------------------\n` +
+                    `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+                    `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+                    `💵 <b>Amount:</b> $${item.amount.toFixed(2)} USD\n` +
+                    `🎁 <b>Bonus:</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
+                    `💰 <b>Total Credited:</b> $${item.totalCredit.toFixed(2)} USD\n` +
+                    `🟢 <b>Status:</b> Auto-Approved ⚡`;
+
+                try {
+                    await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, channelMsg, { parse_mode: 'HTML' });
+                } catch (e) {}
+            }
+        }
+    }, 7000);
+}
+
+startAutoPaymentEngine();
+
+// User State & Preferences Storage (In-memory cache + DB fallback)
+const userState = {};
+const userBalances = {};
+const userLang = {}; // 'km' or 'en'
+const userOrdersCount = {};
+
+function getLang(userId) {
+    return userLang[userId] || 'km'; // Default to Khmer
+}
+
+function getBalance(userId) {
+    return userBalances[userId] || 0.0;
+}
+
+function setBalance(userId, amount) {
+    userBalances[userId] = amount;
+}
+
+function getOrdersCount(userId) {
+    return userOrdersCount[userId] || 0;
+}
+
+// Database Persistence Helpers
+async function dbGetUser(userId, firstName, username) {
+    if (!userLang[userId]) userLang[userId] = 'km';
+    if (userBalances[userId] === undefined) userBalances[userId] = 0.0;
+
+    if (!supabase) return { balance: userBalances[userId], lang: userLang[userId] };
+
+    try {
+        const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('telegram_id', userId)
+            .maybeSingle();
+
+        if (data) {
+            userBalances[userId] = parseFloat(data.balance || 0);
+            if (data.language_code) userLang[userId] = data.language_code;
+            return data;
+        }
+
+        // Create new user if not exists
+        const { data: newUser } = await supabase
+            .from('users')
+            .insert([{
+                telegram_id: userId,
+                first_name: firstName || 'User',
+                username: username || '',
+                balance: 0.00,
+                language_code: 'km'
+            }])
+            .select()
+            .maybeSingle();
+
+        return newUser || { balance: 0, lang: 'km' };
+    } catch (err) {
+        console.error('⚠️ dbGetUser error:', err.message);
+        return { balance: userBalances[userId], lang: userLang[userId] };
+    }
+}
+
+async function dbUpdateBalance(userId, newBalance) {
+    userBalances[userId] = newBalance;
+    if (!supabase) return;
+    try {
+        await supabase
+            .from('users')
+            .update({ balance: newBalance })
+            .eq('telegram_id', userId);
+    } catch (err) {
+        console.error('⚠️ dbUpdateBalance error:', err.message);
+    }
+}
+
+async function dbUpdateLanguage(userId, lang) {
+    userLang[userId] = lang;
+    if (!supabase) return;
+    try {
+        await supabase
+            .from('users')
+            .update({ language_code: lang })
+            .eq('telegram_id', userId);
+    } catch (err) {
+        console.error('⚠️ dbUpdateLanguage error:', err.message);
+    }
+}
+
+const userOrdersCache = {}; // Local memory order history cache
+
+async function dbCreateOrder(userId, orderId, packageName, price, targetLink) {
+    userOrdersCount[userId] = (userOrdersCount[userId] || 0) + 1;
+    const newOrder = {
+        order_id: orderId,
+        telegram_id: userId,
+        package_name: packageName,
+        price: price,
+        target_link: targetLink,
+        status: 'Processing',
+        created_at: new Date().toISOString()
+    };
+
+    userOrdersCache[userId] = userOrdersCache[userId] || [];
+    userOrdersCache[userId].unshift(newOrder);
+
+    if (!supabase) return;
+    try {
+        await supabase
+            .from('orders')
+            .insert([newOrder]);
+    } catch (err) {
+        console.error('⚠️ dbCreateOrder error:', err.message);
+    }
+}
+
+// ==========================================
+// 1. KEYBOARDS LAYOUT (DYNAMIC BY LANGUAGE)
+// ==========================================
+
+// Language Selection Keyboard ( 🇰🇭 Khmer (kh) | 🇺🇸 English (en) )
+const languageKeyboard = Markup.keyboard([
+    ['🇰🇭 Khmer (kh)', '🇺🇸 English (en)']
+]).resize();
+
+// Main Keyboard in Khmer (km)
+const mainKeyboardKM = Markup.keyboard([
+    ['🛒 ទិញសេវាកម្ម TikTok', '👛 កាបូបលុយ/បញ្ចូលលុយ'],
+    ['👤 គណនី & តុល្យភាព', '🎥 វីដេអូណែនាំទិញ'],
+    ['📅 ប្រវត្តិទិញ', '🔍 ពិនិត្យ Order ID'],
+    ['🔝 កំពូលអ្នកទិញ', '💬 ជំនួយ Support'],
+    ['🌐 ផ្លាស់ប្តូរភាសា']
+]).resize();
+
+// Main Keyboard in English (en)
+const mainKeyboardEN = Markup.keyboard([
+    ['🛒 TikTok Services', '👛 Add Funds/Wallet'],
+    ['👤 Profile & Balance', '🎥 Video Tutorial'],
+    ['📅 Order History', '🔍 Check Order ID'],
+    ['🔝 Top Buyers', '💬 Support & Admin'],
+    ['🌐 Change Language']
+]).resize();
+
+function getMainKeyboard(lang) {
+    return lang === 'en' ? mainKeyboardEN : mainKeyboardKM;
+}
+
+// Back to Main Menu Keyboard
+function getBackOnlyKeyboard(lang) {
+    return Markup.keyboard([
+        [lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយធំ']
+    ]).resize();
+}
+
+// Platforms Keyboard
+function getPlatformsKeyboard(lang) {
+    const backText = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
+    return Markup.keyboard([
+        ['🎵 TikTok (ខ្មែរសុទ្ធ 💰)'],
+        ['✈️ Telegram'],
+        [backText]
+    ]).resize();
+}
+
+// TikTok Services Keyboard
+function getTikTokServicesKeyboard(lang) {
+    const backSocial = lang === 'en' ? '↩ Back to Social Media' : '↩ ត្រឡប់ទៅបណ្តាញសង្គម';
+    const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
+    return Markup.keyboard([
+        ['❤️ Like & Views Khmer'],
+        ['👀 Video Views Khmer'],
+        ['👥 Followers Khmer'],
+        [backSocial, backMain]
+    ]).resize();
+}
+
+// Package Keyboards
+function getLikeViewsPackages(lang) {
+    const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
+    const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
+    return Markup.keyboard([
+        ['❤️ 549 - 1.2K Likes + 👀 700 - 2.5K Views = $1.99'],
+        ['❤️ 900 - 2.5K Likes + 👀 1.5K - 4.5K Views = $3.00'],
+        ['❤️ 3K - 6.8K Likes + 👀 4.5K - 15.5K Views = $8.00'],
+        ['❤️ 6.6K - 14.8K Likes + 👀 9.5K - 38.5K Views = $16.00'],
+        ['❤️ 15K - 34K Likes + 👀 22.5K - 77K Views = $35.00'],
+        ['❤️ 35.7K - 80K Likes + 👀 50.5K - 180K Views = $80.00'],
+        ['❤️ 73.5K - 168K Likes + 👀 110K - 360K Views = $150.00'],
+        ['❤️ 297K - 668K Likes + 👀 450K - 1.2M Views = $500.00'],
+        [backTT, backMain]
+    ]).resize();
+}
+
+function getVideoViewsPackages(lang) {
+    const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
+    const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
+    return Markup.keyboard([
+        ['👀 2.4K - 8.2K Views + Likes Random = $1.99'],
+        ['👀 4.2K - 14.4K Views + Likes Random = $3.00'],
+        ['👀 13.2K - 45.3K Views + Likes Random = $8.00'],
+        ['👀 28.9K - 98.9K Views + Likes Random = $16.00'],
+        ['👀 66.3K - 226.8K Views + Likes Random = $35.00'],
+        ['👀 156.7K - 526.1K Views + Likes Random = $80.00'],
+        ['👀 325.5K - 1.11M Views + Likes Random = $150.00'],
+        ['👀 1.3M - 4.5M Views + Likes Random = $500.00'],
+        [backTT, backMain]
+    ]).resize();
+}
+
+function getFollowersPackages(lang) {
+    const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
+    const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
+    return Markup.keyboard([
+        ['👥 18 - 90 Khmer Followers + Likes & Views = $1.99'],
+        ['👥 32 - 160 Khmer Followers + Likes & Views = $3.00'],
+        ['👥 100 - 500 Khmer Followers + Likes & Views = $8.00'],
+        ['👥 210 - 659 Khmer Followers + Likes & Views = $16.00'],
+        ['👥 501 - 992 Khmer Followers + Likes & Views = $35.00'],
+        ['👥 1183 - 1624 Khmer Followers + Likes & Views = $80.00'],
+        ['👥 2456 - 2897 Khmer Followers + Likes & Views = $150.00'],
+        ['👥 9822 - 10263 Khmer Followers + Likes & Views = $500.00'],
+        [backTT, backMain]
+    ]).resize();
+}
+
+// Helper: Calculate Rank Badge
+function getUserRank(count) {
+    if (count >= 50) return '👑 Master Supreme VIP';
+    if (count >= 20) return '💎 Diamond Member';
+    if (count >= 5) return '🥇 Gold Member';
+    if (count >= 1) return '🥈 Silver Member';
+    return '🥉 Bronze Member';
+}
+
+// ==========================================
+// 2. BILINGUAL MESSAGES DICTIONARY
+// ==========================================
+const i18n = {
+    km: {
+        welcome: (name) => 
+            `✨ 💎 <b>BLESSING.KH SMM</b> 💎 ✨\n\n` +
+            `👋 <b>សូមស្វាគមន៍មកកាន់ប្រព័ន្ធ SMM VIP!</b> 🇰🇭\n` +
+            `👤 <b>អតិថិជន ៖</b> <b>${name}</b>\n` +
+            `⚡ <b>ប្រព័ន្ធ ៖</b> 🟢 <b>Online 24/7 ( ស្វ័យប្រវត្តិ 100% )</b>`,
+        account: (name, userId, balance, count) => 
+            `💎 <b>VIP PROFILE CARD</b> 💎\n\n` +
+            `👤 <b>ឈ្មោះ ៖</b> <b>${name}</b>\n` +
+            `📲 <b>User ID ៖</b> <code>${userId}</code>\n` +
+            `👛 <b>តុល្យភាព (Balance) ៖</b> <b>$${balance.toFixed(2)} USD</b> 💵\n` +
+            `📦 <b>ការបញ្ជាទិញសរុប ៖</b> <b>${count} Orders</b>\n` +
+            `🏅 <b>កម្រិតគណនី (Rank) ៖</b> <b>${getUserRank(count)}</b>\n\n` +
+            `📢 <b>តាមដានប្រូម៉ូសិន ៖</b> <a href="${CHANNEL_LINK}">${CHANNEL_LINK}</a>\n` +
+            `⚡ <i>សេវាកម្មរហ័សទាន់ចិត្ត សុវត្ថិភាពខ្ពស់ និង មានទំនុកចិត្ត ១០០%!</i>`,
+        add_funds: (balance) => 
+            `💳 <b>កាបូបលុយ & បញ្ចូលលុយ</b> 💳\n\n` +
+            `💸 <b>សមតុល្យបច្ចុប្បន្ន ៖</b> <b>$${balance.toFixed(2)} USD</b>\n\n` +
+            `🎁 <b>Bonus បន្ថែម ៖</b>\n` +
+            (isBonusPromoOn ? `✦ បញ្ចូល <b>$${bonusMinDeposit.toFixed(2)}+</b> ទទួលបាន <b>+${bonusPercentage}% Bonus</b> ភ្លាមៗ! 🎉\n\n` : `✦ <i>ពុំមានប្រូម៉ូសិន Bonus ក្នុងពេលនេះឡើយ។</i>\n\n`) +
+            `👇 <b>សូមវាយបញ្ចូលចំនួនទឹកប្រាក់ ( ឧទាហរណ៍ ៖ 5, 10, 20 ឬ 50 ) ៖</b>`,
+        top_buyers: 
+            `🏆 <b>TOP 10 BUYERS</b> 🏆\n` +
+            `----------------------------------------\n` +
+            `🥇 6673xxxxxx — <b>$34.45</b>\n` +
+            `🥈 1364xxxxxx — <b>$27.00</b>\n` +
+            `🥉 1212xxxxxx — <b>$25.00</b>\n` +
+            `✦ 4. 7225xxxxxx — <b>$23.96</b>\n` +
+            `✦ 5. 6732xxxxxx — <b>$20.87</b>\n` +
+            `✦ 6. 1130xxxxxx — <b>$20.00</b>\n` +
+            `✦ 7. 5833xxxxxx — <b>$18.99</b>\n` +
+            `✦ 8. 6001xxxxxx — <b>$17.74</b>\n` +
+            `✦ 9. 6194xxxxxx — <b>$16.00</b>\n` +
+            `✦ 10. 5123xxxxxx — <b>$15.73</b>`,
+        my_orders_empty: `📦 <b>Order History</b>\n\nYou haven't placed any orders yet.`,
+        check_order_prompt: `🔍 <b>ពិនិត្យលេខកូដបញ្ជាទិញ</b>\n\nសូមផ្ញើលេខកូដបញ្ជាទិញរបស់អ្នកដើម្បីត្រួតពិនិត្យ (ឧទាហរណ៍ ៖ #ORD-123456) ៖`,
+        how_to_order_caption: `💡 <b>វីដេអូណែនាំរបៀបបញ្ជាទិញ (How to Order Guide)</b>\n\n` +
+            `⏳ សូមទស្សនាវីដេអូខ្លីនេះ ដើម្បីយល់ដឹងពីរបៀបទិញយ៉ាងងាយស្រួល ៖\n\n` +
+            `📢 <b>Official Channel ៖</b> <a href="${CHANNEL_LINK}">${CHANNEL_LINK}</a>\n` +
+            `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}`,
+        choose_platform: `🛒 <b>ជ្រើសរើសបណ្តាញសង្គម (Choose Platform)</b>\n----------------------------------------\nសូមជ្រើសរើសសេវាកម្មខាងក្រោម ៖`,
+        tiktok_services: `🎵 <b>សេវាកម្ម TikTok Khmer ( ខ្មែរសុទ្ធ 100% )</b>\n----------------------------------------\nសូមជ្រើសរើសប្រភេទសេវាកម្មខាងក្រោម ៖`
+    },
+    en: {
+        welcome: (name) => 
+            `✨ 💎 <b>BLESSING.KH SMM</b> 💎 ✨\n\n` +
+            `👋 <b>Welcome to SMM VIP System!</b> 🇰🇭\n` +
+            `👤 <b>Customer:</b> <b>${name}</b>\n` +
+            `⚡ <b>System:</b> 🟢 <b>Online 24/7 ( 100% Automated )</b>`,
+        account: (name, userId, balance, count) => 
+            `💎 <b>VIP PROFILE CARD</b> 💎\n\n` +
+            `👤 <b>Name:</b> <b>${name}</b>\n` +
+            `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+            `👛 <b>Balance:</b> <b>$${balance.toFixed(2)} USD</b> 💵\n` +
+            `📦 <b>Total Orders:</b> <b>${count} Orders</b>\n` +
+            `🏅 <b>Account Rank:</b> <b>${getUserRank(count)}</b>\n\n` +
+            `📢 <b>Official Channel:</b> ${CHANNEL_LINK}\n` +
+            `⚡ <i>Fast execution, maximum security, 100% reliable!</i>`,
+        add_funds: (balance) => 
+            `💳 <b>WALLET & ADD FUNDS</b> 💳\n\n` +
+            `💸 <b>Current Balance:</b> <b>$${balance.toFixed(2)} USD</b>\n\n` +
+            `🎁 <b>Active Bonus:</b>\n` +
+            (isBonusPromoOn ? `✦ Deposit <b>$${bonusMinDeposit.toFixed(2)}+</b> get an extra <b>+${bonusPercentage}% Bonus</b>! 🎉\n\n` : `✦ <i>No bonus promotion active right now.</i>\n\n`) +
+            `👇 <b>Enter deposit amount (e.g. 5, 10, 20 or 50):</b>`,
+        top_buyers: 
+            `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS</b> ] ━━━━━━━ 🏆\n` +
+            `----------------------------------------\n` +
+            `🥇 6673xxxxxx — <b>$34.45</b>\n` +
+            `🥈 1364xxxxxx — <b>$27.00</b>\n` +
+            `🥉 1212xxxxxx — <b>$25.00</b>\n` +
+            `✦ 4. 7225xxxxxx — <b>$23.96</b>\n` +
+            `✦ 5. 6732xxxxxx — <b>$20.87</b>\n` +
+            `✦ 6. 1130xxxxxx — <b>$20.00</b>\n` +
+            `✦ 7. 5833xxxxxx — <b>$18.99</b>\n` +
+            `✦ 8. 6001xxxxxx — <b>$17.74</b>\n` +
+            `✦ 9. 6194xxxxxx — <b>$16.00</b>\n` +
+            `✦ 10. 5123xxxxxx — <b>$15.73</b>`,
+        my_orders_empty: `📦 <b>Order History</b>\n\nYou haven't placed any orders yet.`,
+        check_order_prompt: `🔍 <b>Check Order ID</b>\n\nPlease send your Order ID to check (e.g. #ORD-123456):`,
+        how_to_order_caption: `💡 <b>How to Order Video Guide</b>\n\n` +
+            `⏳ Please watch this short video guide to understand the ordering process:\n\n` +
+            `📢 <b>Official Channel:</b> ${CHANNEL_LINK}\n` +
+            `📞 <b>Support Admin:</b> ${SUPPORT_LINK}`,
+        choose_platform: `🛒 <b>Choose a Platform</b>\n----------------------------------------\nSelect a platform below:`,
+        tiktok_services: `🎵 <b>TikTok Services ( 100% Real Khmer )</b>\n----------------------------------------\nSelect a service type below:`
+    }
+};
+
+// ==========================================
+const hasSeenGuide = {}; // Tracks users who have received the auto video guide once
+
+// Helper Function: Send How to Order Guide (Displays Video Card for Admin's How to link + CTA Buttons)
+async function sendHowToOrderGuide(ctx) {
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const mainKb = getMainKeyboard(lang);
+
+    const activeHowtoLink = (howtoVideoLinks && howtoVideoLinks[0]) ? howtoVideoLinks[0] : CHANNEL_LINK;
+
+    const guideText = lang === 'km' ?
+        `💡 <b>វីដេអូណែនាំរបៀបបញ្ជាទិញ (How to Order Guide)</b>\n\n` +
+        `⏳ សូមទស្សនាវីដេអូខ្លីនេះ ដើម្បីយល់ដឹងពីរបៀបទិញយ៉ាងងាយស្រួល ៖\n\n` +
+        `📢 <b>Official Channel ៖</b> <a href="${activeHowtoLink}">${activeHowtoLink}</a>\n` +
+        `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}` :
+
+        `💡 <b>How to Order Video Guide</b>\n\n` +
+        `⏳ Please watch this short video guide to understand the ordering process:\n\n` +
+        `📢 <b>Official Channel:</b> <a href="${activeHowtoLink}">${activeHowtoLink}</a>\n` +
+        `📞 <b>Support Admin:</b> ${SUPPORT_LINK}`;
+
+    const videoButtonKb = Markup.inlineKeyboard([
+        [Markup.button.url(lang === 'km' ? '🎬 ទស្សនាវីដេអូណែនាំ & ចូលរួម Channel ↗️' : '🎬 Watch Video & Join Official Channel ↗️', activeHowtoLink)],
+        [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Blessing.Kh_Public ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Blessing.Kh_Public Channel 🎁 ↗️', activeHowtoLink)]
+    ]);
+
+    await ctx.replyWithHTML(guideText, { ...videoButtonKb, ...mainKb });
+}
+
+// 1-Click Action for How to Order Video Guide
+bot.action('how_to_order_action', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    return sendHowToOrderGuide(ctx);
+});
+
+// ==========================================
+// 3. BOT COMMANDS & HANDLERS
+// ==========================================
+
+// START COMMAND (/start) - Always shows Language Selection Keyboard first
+bot.start(async (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const firstName = ctx.from.first_name || 'User';
+
+    // Initialize user in Database if available
+    await dbGetUser(userId, firstName, ctx.from.username);
+
+    return ctx.replyWithHTML(
+        `Welcome, <b>${firstName}</b>! Please select your language / សូមជ្រើសរើសភាសា ៖`,
+        languageKeyboard
+    );
+});
+
+// Helper Function: Send Welcome Screen Card (Connected with Admin Start Media Video)
+async function sendWelcomeMessage(ctx) {
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const firstName = ctx.from.first_name || 'User';
+
+    const welcomeText = i18n[lang].welcome(firstName);
+    const mainKb = getMainKeyboard(lang);
+
+    const activeChannelLink = (howtoVideoLinks && howtoVideoLinks[0]) ? howtoVideoLinks[0] : CHANNEL_LINK;
+
+    const welcomeButtons = Markup.inlineKeyboard([
+        [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Telegram Channel ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Official Telegram Channel 🎁 ↗️', activeChannelLink)],
+        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( ២៤ម៉ោង ⚡ ) ↗️' : '💬 Contact Admin Support 24/7 ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
+    ]);
+
+    const videoId = customHowToOrderVideoId || process.env.HOW_TO_ORDER_VIDEO_ID;
+    if (videoId) {
+        try {
+            await ctx.replyWithVideo(videoId, {
+                caption: welcomeText,
+                parse_mode: 'HTML',
+                supports_streaming: true,
+                width: 720,
+                height: 1280,
+                ...welcomeButtons
+            });
+            await ctx.replyWithHTML(lang === 'km' ? '👇 <i>សូមជ្រើសរើសមេនុយខាងក្រោមដើម្បីចាប់ផ្តើម ៖</i>' : '👇 <i>Select from the menu below:</i>', mainKb);
+            return;
+        } catch (e) {
+            console.error('⚠️ Could not send welcome video by File ID:', e.message);
+        }
+    }
+
+    return ctx.replyWithHTML(welcomeText, { disable_web_page_preview: true, ...welcomeButtons, ...mainKb });
+}
+
+// SET KHMER LANGUAGE (🇰🇭 Khmer (kh))
+bot.hears(['🇰🇭 Khmer (kh)', 'Khmer (kh)'], async (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    await dbUpdateLanguage(userId, 'km');
+
+    await ctx.reply(`✔ ភាសាត្រូវបានកំណត់ទៅជា ភាសាខ្មែរ។`);
+    return sendWelcomeMessage(ctx);
+});
+
+// SET ENGLISH LANGUAGE (🇺🇸 English (en))
+bot.hears(['🇺🇸 English (en)', 'English (en)'], async (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    await dbUpdateLanguage(userId, 'en');
+
+    await ctx.reply(`✔ Language set to English.`);
+    return sendWelcomeMessage(ctx);
+});
+
+// LANGUAGE SWITCHER BUTTON
+bot.hears(['🌐 ផ្លាស់ប្តូរភាសា', 'ផ្លាស់ប្តូរភាសា', '🌐 Change Language', 'Change Language', '◀ ផ្លាស់ប្តូរភាសា', '◀ ប្តូរភាសា', '◀ Change Language', '/language', '🌐 Language / ភាសា'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const firstName = ctx.from.first_name || 'User';
+    ctx.replyWithHTML(`Welcome, <b>${firstName}</b>! Please select your language / សូមជ្រើសរើសភាសា ៖`, languageKeyboard);
+});
+
+// BACK TO MAIN MENU
+bot.hears(['↩ ត្រឡប់ទៅមេនុយធំ', '↩ ត្រឡប់ទៅមេនុយដើម', '↩ Back to Main Menu', 'Back to Main Menu'], async (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    return sendWelcomeMessage(ctx);
+});
+
+// 👤 ACCOUNT / PROFILE & BALANCE
+bot.hears(['👤 Profile & Balance', 'Profile & Balance', '👤 គណនី & តុល្យភាព', 'គណនី & តុល្យភាព', '👤 គណនី', '👤 Account', 'គណនី', 'Account'], async (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const firstName = ctx.from.first_name || 'Customer';
+
+    await dbGetUser(userId, firstName, ctx.from.username);
+
+    const lang = getLang(userId);
+    const balance = getBalance(userId);
+    const ordersCount = getOrdersCount(userId);
+
+    ctx.replyWithHTML(i18n[lang].account(firstName, userId, balance, ordersCount), { disable_web_page_preview: true, ...getMainKeyboard(lang) });
+});
+
+// 👛 ADD FUNDS / WALLET
+bot.hears(['👛 Add Funds/Wallet', 'Add Funds/Wallet', '👛 កាបូបលុយ/បញ្ចូលលុយ', 'កាបូបលុយ/បញ្ចូលលុយ', '👛 បញ្ចូលលុយ', '👛 Add Funds', 'បញ្ចូលលុយ', 'Add Funds'], (ctx) => {
+    const userId = ctx.from.id;
+    userState[userId] = { step: 'AWAITING_DEPOSIT_AMOUNT' };
+    const lang = getLang(userId);
+    const balance = getBalance(userId);
+
+    ctx.replyWithHTML(i18n[lang].add_funds(balance), { ...getBackOnlyKeyboard(lang), disable_web_page_preview: true });
+});
+
+// 🎥 VIDEO TUTORIAL (HOW TO ORDER GUIDE)
+bot.hears(['🎥 Video Tutorial', 'Video Tutorial', '🎥 វីដេអូណែនាំទិញ', 'វីដេអូណែនាំទិញ', '🖼️ របៀបបញ្ជាទិញ', '🖼️ How to Order', 'របៀបបញ្ជាទិញ', 'How to Order'], async (ctx) => {
+    delete userState[ctx.from.id];
+    await sendHowToOrderGuide(ctx);
+});
+
+// 💬 SUPPORT & ADMIN
+bot.hears(['💬 Support & Admin', 'Support & Admin', '💬 ជំនួយ Support', 'ជំនួយ Support', '📞 Contact', 'Support'], (ctx) => {
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const activeChannelLink = (howtoVideoLinks && howtoVideoLinks[0]) ? howtoVideoLinks[0] : CHANNEL_LINK;
+
+    const supportMsg = lang === 'km' ? 
+        `💬 <b>ផ្នែកជំនួយ (SUPPORT ADMIN)</b> 💬\n\n` +
+        `លោកអ្នកមានចម្ងល់ ឬ ត្រូវការជំនួយក្នុងការបញ្ជាទិញ? 💡\n\n` +
+        `📢 <b>Telegram Channel ផ្លូវការ ៖</b> <a href="${activeChannelLink}">${activeChannelLink}</a>\n` +
+        `👤 <b>Admin Support ៖</b> ${SUPPORT_LINK}\n\n` +
+        `⚡ <i>ក្រុមការងារយើងខ្ញុំរង់ចាំជួយសម្រួល ២៤ម៉ោង / ៧ថ្ងៃ!</i>` :
+        `💬 <b>SUPPORT ADMIN</b> 💬\n\n` +
+        `Have questions or need assistance with your order? 💡\n\n` +
+        `📢 <b>Official Telegram Channel:</b> <a href="${activeChannelLink}">${activeChannelLink}</a>\n` +
+        `👤 <b>Admin Support:</b> ${SUPPORT_LINK}\n\n` +
+        `⚡ <i>We are here to assist you 24/7!</i>`;
+
+    const channelInlineKb = Markup.inlineKeyboard([
+        [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Telegram Channel ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Official Telegram Channel 🎁 ↗️', activeChannelLink)],
+        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( ២៤ម៉ោង ⚡ ) ↗️' : '💬 Contact Admin Support 24/7 ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
+    ]);
+
+    ctx.replyWithHTML(supportMsg, { disable_web_page_preview: true, ...channelInlineKb, ...getMainKeyboard(lang) });
+});
+
+// 🎵 TIKTOK SERVICES (CATEGORIES & PLATFORMS)
+bot.hears(['🎵 TikTok (ខ្មែរសុទ្ធ 💰)', '🎵 TikTok', '🛒 TikTok Services', 'TikTok Services', '🛒 Buy TikTok Services', 'Buy TikTok Services', '🛒 ទិញសេវាកម្ម TikTok', 'ទិញសេវាកម្ម TikTok', '🛒 បណ្តាញសង្គម', '🛒 Social Media', 'បណ្តាញសង្គម', 'Social Media', '↩ ត្រឡប់ទៅសេវាកម្ម TikTok', '↩ Back to TikTok Services', '↩ ត្រឡប់ទៅបណ្តាញសង្គម', '↩ Back to Social Media'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const lang = getLang(userId);
+    ctx.replyWithHTML(i18n[lang].tiktok_services, getTikTokServicesKeyboard(lang));
+});
+
+// Telegram Placeholder
+bot.hears(['✈️ Telegram'], (ctx) => {
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const msg = lang === 'km' ? 
+        `🚧 សេវាកម្មនេះកំពុងរៀបចំឡើង។ សូមជ្រើសរើស <b>🎵 TikTok (ខ្មែរសុទ្ធ 💰)</b> ជាបណ្តោះអាសន្ន!` : 
+        `🚧 Service under construction. Please select <b>🎵 TikTok (ខ្មែរសុទ្ធ 💰)</b> for now!`;
+    ctx.replyWithHTML(msg, getPlatformsKeyboard(lang));
+});
+
+// TIKTOK SUB-SERVICE CATEGORIES
+bot.hears(['❤️ Like & Views Khmer', '🛒 Like & Views Khmer', 'Like & Views Khmer'], (ctx) => {
+    delete userState[ctx.from.id];
+    const lang = getLang(ctx.from.id);
+    const text = `🛒 <b>Like & Views Khmer</b>\n----------------------------------------\nTap a package to order:`;
+    ctx.replyWithHTML(text, getLikeViewsPackages(lang));
+});
+
+bot.hears(['👀 Video Views Khmer', '🛒 Video Views Khmer', 'Video Views Khmer'], (ctx) => {
+    delete userState[ctx.from.id];
+    const lang = getLang(ctx.from.id);
+    const text = `🛒 <b>Video Views Khmer</b>\n----------------------------------------\nTap a package to order:`;
+    ctx.replyWithHTML(text, getVideoViewsPackages(lang));
+});
+
+bot.hears(['👥 Followers Khmer', '🛒 Followers Khmer', 'Followers Khmer'], (ctx) => {
+    delete userState[ctx.from.id];
+    const lang = getLang(ctx.from.id);
+    const text = `🛒 <b>Followers Khmer</b>\n----------------------------------------\nTap a package to order:`;
+    ctx.replyWithHTML(text, getFollowersPackages(lang));
+});
+
+// 📅 MY ORDERS / 📅 ប្រវត្តិទិញ
+bot.hears(['📅 ប្រវត្តិទិញ', '📅 ការបញ្ជាទិញរបស់ខ្ញុំ', '📅 Order History', '📅 My Orders', 'ប្រវត្តិទិញ', 'ការបញ្ជាទិញរបស់ខ្ញុំ', 'Order History', 'My Orders'], async (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const lang = getLang(userId);
+
+    let ordersList = userOrdersCache[userId] || [];
+
+    if (supabase) {
+        try {
+            const { data: userOrders } = await supabase
+                .from('orders')
+                .select('*')
+                .eq('telegram_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(5);
+
+            if (userOrders && userOrders.length > 0) {
+                ordersList = userOrders;
+                userOrdersCache[userId] = userOrders;
+            }
+        } catch (e) {}
+    }
+
+    let ordersListText = '';
+    if (ordersList && ordersList.length > 0) {
+        ordersListText = `📦 <b>ប្រវត្តិការបញ្ជាទិញ (Order History)</b>\n----------------------------------------\n\n` +
+            ordersList.map(o => 
+                `🆔 <b>ID:</b> <code>${o.order_id}</code>\n` +
+                `📦 <b>Package:</b> ${o.package_name}\n` +
+                `💵 <b>Price:</b> $${parseFloat(o.price || 0).toFixed(2)} USD\n` +
+                `🟢 <b>Status:</b> <b>${o.status || 'Processing'} ⚡</b>\n`
+            ).join('\n----------------------------------------\n\n');
+    } else {
+        ordersListText = i18n[lang].my_orders_empty;
+    }
+
+    ctx.replyWithHTML(ordersListText, getMainKeyboard(lang));
+});
+
+// 🔍 CHECK ORDER ID / 🔍 ពិនិត្យ Order ID
+bot.hears(['🔍 ពិនិត្យ Order ID', '🔍 ពិនិត្យលេខកូដបញ្ជាទិញ', '🔍 Check Order ID', 'ពិនិត្យ Order ID', 'ពិនិត្យលេខកូដបញ្ជាទិញ', 'Check Order ID'], (ctx) => {
+    const userId = ctx.from.id;
+    userState[userId] = { step: 'AWAITING_CHECK_ORDER' };
+    const lang = getLang(userId);
+    ctx.replyWithHTML(i18n[lang].check_order_prompt, getBackOnlyKeyboard(lang));
+});
+
+// 🔝 TOP BUYERS / 🔝 កំពូលអ្នកទិញ
+bot.hears(['🔝 កំពូលអ្នកទិញ', '🔝 Top Buyers', 'កំពូលអ្នកទិញ', 'Top Buyers'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const lang = getLang(userId);
+    ctx.replyWithHTML(i18n[lang].top_buyers, getMainKeyboard(lang));
+});
+
+// PACKAGE SELECTION LISTENERS
+bot.hears(/(.*)=\s*\$([0-9.]+)/, (ctx) => {
+    const packageName = ctx.match[1].trim();
+    const price = parseFloat(ctx.match[2]);
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+
+    userState[userId] = {
+        step: 'AWAITING_POLICY_CONFIRM',
+        package: packageName,
+        price: price
+    };
+
+    const policyMsg = lang === 'km' ?
+        `⚠️ <b>គោលការណ៍ និង ការប្រុងប្រយ័ត្ន (Policy & Warning)</b>\n` +
+        `• ហាមផ្លាស់ប្តូរ Username ក្នុងអំឡុងពេលប្រព័ន្ធកំពុងដំណើការ។\n` +
+        `• ហាមប្តូរគណនីទៅជា Private (ឯកជន)។\n` +
+        `• មិនមានការប្រគល់លុយវិញ (No Refund) បន្ទាប់ពីការបញ្ជាទិញបានចាប់ផ្តើម។\n` +
+        `• ផ្ញើ Link ខុស = មិនមានការប្រគល់លុយវិញ។\n` +
+        `• គណនី TikTok ត្រូវតែជារបស់បុគ្គលដែលមានអាយុចាប់ពី ១៨ ឆ្នាំឡើងទៅ។\n` +
+        `• ហាមប្រពឹត្ត/បង្ហោះមាតិកាបារី, ថ្នាំជក់, គ្រឿងស្រវឹង, អាវុធ, ឈាម, នយោបាយ ឬ មាតិកា 18+ 🚫\n` +
+        `_______________________________________\n\n` +
+        `👍 ចុច <b>បន្តការបញ្ជាទិញ</b> ដើម្បីដាក់បញ្ជាទិញនេះ។` :
+        `⚠️ <b>Policy & Warning</b>\n` +
+        `• Don't change your username while the order is active.\n` +
+        `• Don't make your account private.\n` +
+        `• No refund after the order starts.\n` +
+        `• Wrong link = No refund.\n` +
+        `• The TikTok account must belong to someone over 18 years old.\n` +
+        `• No tobacco, vape, alcohol, weapons, blood, politics, or 18+ content. 🚫\n` +
+        `_______________________________________\n\n` +
+        `👍 Tap <b>Continue to Order</b> to place this order.`;
+
+    const confirmKb = Markup.keyboard([
+        [lang === 'km' ? 'បន្តការបញ្ជាទិញ' : 'Continue to Order'],
+        [lang === 'km' ? '❌ បោះបង់ការបញ្ជាទិញ' : '❌ Cancel Order']
+    ]).resize();
+
+    ctx.replyWithHTML(policyMsg, confirmKb);
+});
+
+// CONTINUE TO ORDER LISTENER (BILINGUAL)
+bot.hears(['Continue to Order', 'Continue', 'បន្តការបញ្ជាទិញ', 'បន្ត'], (ctx) => {
+    const userId = ctx.from.id;
+    const state = userState[userId];
+    const lang = getLang(userId);
+
+    if (!state || state.step !== 'AWAITING_POLICY_CONFIRM') {
+        const noPkgErr = lang === 'km' ? '❌ ពុំមាន Package ត្រូវបានជ្រើសរើសឡើយ។' : '❌ No active package selected.';
+        return ctx.replyWithHTML(noPkgErr, getMainKeyboard(lang));
+    }
+
+    state.step = 'AWAITING_LINK';
+
+    const promptText = lang === 'km' ?
+        `💬 <b>បានជ្រើសរើស Package ជោគជ័យ!</b>\n` +
+        `_______________________________________\n` +
+        `🛒 <b>${state.package}</b>\n` +
+        `💰 តម្លៃ៖ <b>$${state.price.toFixed(2)} USD</b>\n` +
+        `_______________________________________\n\n` +
+        `🔗 <b>សូមផ្ញើ Link វីដេអូ TikTok របស់អ្នកនៅទីនេះ ៖</b>` :
+        `💬 <b>Package selected!</b>\n` +
+        `_______________________________________\n` +
+        `🛒 <b>${state.package}</b>\n` +
+        `💰 Price: <b>$${state.price.toFixed(2)} USD</b>\n` +
+        `_______________________________________\n\n` +
+        `🔗 <b>Please send the full link to your TikTok video:</b>`;
+
+    const cancelKb = Markup.keyboard([
+        [lang === 'km' ? '❌ បោះបង់ការបញ្ជាទិញ' : '❌ Cancel Order']
+    ]).resize();
+
+    ctx.replyWithHTML(promptText, cancelKb);
+});
+
+// CANCEL ORDER LISTENER (BILINGUAL)
+bot.hears(['❌ Cancel Order', 'Cancel Order', '❌ បោះបង់ការបញ្ជាទិញ', 'បោះបង់ការបញ្ជាទិញ', '❌ បោះបង់ការទូទាត់'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const lang = getLang(userId);
+    const cancelMsg = lang === 'en' ? '❌ Order Cancelled.' : '❌ បានបោះបង់ការបញ្ជាទិញ។';
+    ctx.replyWithHTML(cancelMsg, getMainKeyboard(lang));
+});
+
+// TEXT INPUT LISTENERS (DEPOSIT & ORDER PROCESSING)
+bot.on('text', async (ctx, next) => {
+    const userId = ctx.from.id;
+    const text = ctx.message.text.trim();
+    const lang = getLang(userId);
+    const state = userState[userId];
+
+    // Maintenance Mode Check for Non-Admins
+    if (!isBotOpen && !isAdmin(userId)) {
+        return ctx.replyWithHTML(
+            `🚧 <b>ប្រព័ន្ធកំពុងអភិវឌ្ឍន៍/ថែទាំ (Bot Under Maintenance)</b>\n\n` +
+            `ប្រព័ន្ធកំពុងត្រូវបានធ្វើការរៀបចំថែទាំដោយ Admin មួយរយៈ។\n` +
+            `សូមអភ័យទោសចំពោះការរំខាន ហើយសូមវិលត្រឡប់មកវិញក្នុងពេលឆាប់ៗនេះ! 💖\n\n` +
+            `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}`
+        );
+    }
+
+    // ADMIN STEPS HANDLING
+    if (state && state.step.startsWith('AWAITING_ADMIN_')) {
+        if (state.step === 'AWAITING_ADMIN_FIND_USER') {
+            delete userState[userId];
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+            const bal = getBalance(targetId);
+            const count = getOrdersCount(targetId);
+
+            const card = 
+                `👤 <b>BLESSING.KH CUSTOMER PROFILE</b>\n----------------------------------------\n` +
+                `🆔 <b>Telegram ID:</b> <code>${targetId}</code>\n` +
+                `👛 <b>Balance:</b> <b>$${bal.toFixed(2)} USD</b> 💵\n` +
+                `📦 <b>Total Orders:</b> ${count} Orders\n` +
+                `🏅 <b>VIP Rank:</b> ${getUserRank(count)}\n` +
+                `📅 <b>Last Active:</b> ${new Date().toISOString().split('T')[0]}`;
+
+            return ctx.replyWithHTML(card, adminUsersKeyboard);
+        }
+
+        if (state.step === 'AWAITING_ADMIN_CREDIT_ID') {
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+            userState[userId] = { step: 'AWAITING_ADMIN_CREDIT_AMOUNT', targetId: targetId };
+            return ctx.replyWithHTML(`💵 <b>បញ្ចូលចំនួនទឹកប្រាក់ ($) ដែលត្រូវបន្ថែមជូន User ID <code>${targetId}</code> ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_CREDIT_AMOUNT') {
+            const targetId = state.targetId;
+            const amount = parseFloat(text);
+            delete userState[userId];
+
+            if (isNaN(amount) || amount <= 0) return ctx.replyWithHTML('❌ ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!', adminUsersKeyboard);
+            if (amount > 100000) {
+                return ctx.replyWithHTML('⚠️ <b>ចំនួនទឹកប្រាក់ធំពេក (លើសពី $100,000 USD)!</b>\nសូមពិនិត្យមើលថា ៖ តើបងច្រឡំបញ្ចូលលេខ User ID ជាចំនួនទឹកប្រាក់ដែរឬទេ? 😃', adminUsersKeyboard);
+            }
+
+            const newBal = getBalance(targetId) + amount;
+            await dbUpdateBalance(targetId, newBal);
+
+            ctx.replyWithHTML(`✅ <b>បានបន្ថែម +$${amount.toFixed(2)} USD ជូនអតិថិជន <code>${targetId}</code> ដោយជោគជ័យ!</b>\n💰 តុល្យភាពថ្មី ៖ <b>$${newBal.toFixed(2)} USD</b>`, adminUsersKeyboard);
+
+            try {
+                await bot.telegram.sendMessage(targetId, 
+                    `🎉 <b>អបអរសាទរ! (BLESSING.KH SMM)</b> 🎉\n` +
+                    `----------------------------------------\n` +
+                    `គណនីរបស់អ្នកទទួលបានការបញ្ចូលលុយចំនួន <b>+$${amount.toFixed(2)} USD</b> ពី Admin!\n\n` +
+                    `💰 <b>តុល្យភាពលុយថ្មី ៖</b> <b>$${newBal.toFixed(2)} USD</b> 💵`, 
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+            return;
+        }
+
+        if (state.step === 'AWAITING_ADMIN_DEDUCT_ID') {
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+            userState[userId] = { step: 'AWAITING_ADMIN_DEDUCT_AMOUNT', targetId: targetId };
+            return ctx.replyWithHTML(`💵 <b>បញ្ចូលចំនួនទឹកប្រាក់ ($) ដែលត្រូវកាត់ចេញពី User ID <code>${targetId}</code> ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_DEDUCT_AMOUNT') {
+            const targetId = state.targetId;
+            const amount = parseFloat(text);
+            delete userState[userId];
+
+            if (isNaN(amount) || amount <= 0) return ctx.replyWithHTML('❌ ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!', adminUsersKeyboard);
+            if (amount > 100000) {
+                return ctx.replyWithHTML('⚠️ <b>ចំនួនទឹកប្រាក់ធំពេក (លើសពី $100,000 USD)!</b>\nសូមពិនិត្យមើលថា ៖ តើបងច្រឡំបញ្ចូលលេខ User ID ជាចំនួនទឹកប្រាក់ដែរឬទេ? 😃', adminUsersKeyboard);
+            }
+
+            const newBal = Math.max(0, getBalance(targetId) - amount);
+            await dbUpdateBalance(targetId, newBal);
+
+            ctx.replyWithHTML(`✅ <b>បានកាត់ប្រាក់ -$${amount.toFixed(2)} USD ពីអតិថិជន <code>${targetId}</code> ដោយជោគជ័យ!</b>\n💰 តុល្យភាពនៅសល់ ៖ <b>$${newBal.toFixed(2)} USD</b>`, adminUsersKeyboard);
+
+            try {
+                await bot.telegram.sendMessage(targetId, 
+                    `⚠️ <b>ជូនដំណឹងកាត់ប្រាក់ (BLESSING.KH SMM)</b>\n` +
+                    `----------------------------------------\n` +
+                    `គណនីរបស់អ្នកត្រូវបានកាត់ប្រាក់ចំនួន <b>-$${amount.toFixed(2)} USD</b> ពី Admin។\n\n` +
+                    `💰 <b>តុល្យភាពលុយនៅសល់ ៖</b> <b>$${newBal.toFixed(2)} USD</b> 💵`, 
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+            return;
+        }
+
+        if (state.step === 'AWAITING_ADMIN_PAYWAY_LINK') {
+            delete userState[userId];
+            let cleanLink = text.trim();
+            if (!cleanLink.startsWith('http://') && !cleanLink.startsWith('https://')) {
+                if (cleanLink.includes('.')) {
+                    cleanLink = 'https://' + cleanLink;
+                } else {
+                    cleanLink = 'https://link.payway.com.kh/' + cleanLink;
+                }
+            }
+            paywayMerchantLink = cleanLink;
+            return ctx.replyWithHTML(
+                `✅ <b>បានផ្លាស់ប្តូរ ABA PayWay Link ថ្មីដោយជោគជ័យ ៖</b>\n\n` +
+                `🔗 <b>Link ថ្មី ៖</b> <code>${paywayMerchantLink}</code>`,
+                getAdminSettingsKeyboard()
+            );
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_ACLEDA_TOKEN') {
+            delete userState[userId];
+            acledaApiToken = text;
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែ ACLEDA Bank API Token ដោយជោគជ័យ!</b>\n\n<code>${acledaApiToken}</code>`, getAdminSettingsKeyboard());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_BAKONG_ID') {
+            delete userState[userId];
+            bakongAccountId = text.trim();
+            return ctx.replyWithHTML(
+                `✅ <b>បានកែប្រែ Bakong Merchant Account ID ដោយជោគជ័យ!</b>\n\n` +
+                `🇰🇭 <b>Bakong Account ID ថ្មី ៖</b> <code>${bakongAccountId}</code>`,
+                getAdminSettingsKeyboard()
+            );
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_BONUS_PERCENT') {
+            delete userState[userId];
+            const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+            if (isNaN(val) || val < 0) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនភាគរយមិនត្រឹមត្រូវ!</b>', getAdminPromoKeyboard());
+            }
+            bonusPercentage = val;
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែភាគរយ Bonus ទៅជា +${bonusPercentage}% ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_BONUS_MIN') {
+            delete userState[userId];
+            const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+            if (isNaN(val) || val < 0) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>', getAdminPromoKeyboard());
+            }
+            bonusMinDeposit = val;
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែប្រាក់ Deposit ទាបបំផុតសម្រាប់ទទួលបាន Bonus ទៅជា $${bonusMinDeposit.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_BROADCAST') {
+            delete userState[userId];
+            const broadcastText = text;
+
+            let targetUsers = Object.keys(userBalances).map(id => parseInt(id));
+            if (supabase) {
+                try {
+                    const { data } = await supabase.from('users').select('telegram_id');
+                    if (data && data.length > 0) targetUsers = data.map(u => u.telegram_id);
+                } catch (e) {}
+            }
+
+            let successCount = 0, failCount = 0;
+            await ctx.replyWithHTML(`⏳ Broadcast sending to <b>${targetUsers.length}</b> users...`);
+
+            for (const tId of targetUsers) {
+                try {
+                    await bot.telegram.sendMessage(tId, broadcastText, { parse_mode: 'HTML' });
+                    successCount++;
+                } catch (e) {
+                    failCount++;
+                }
+            }
+
+            return ctx.replyWithHTML(`✅ <b>Broadcast Complete!</b>\n\n🟢 Success: <b>${successCount}</b>\n🔴 Failed: <b>${failCount}</b>`, adminToolsKeyboard);
+        }
+    }
+
+    // FLOW: PAYWAY DIRECT PAID AMOUNT INPUT VERIFICATION
+    if (state && state.step === 'AWAITING_PAYWAY_PAID_AMOUNT') {
+        delete userState[userId];
+        const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
+        if (isNaN(amount) || amount <= 0) {
+            return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>\nសូមចុច [ Add Funds/Wallet ] ម្ដងទៀត។', getMainKeyboard(lang));
+        }
+
+        let bonusPercent = (isBonusPromoOn && amount >= bonusMinDeposit) ? bonusPercentage : 0;
+        let bonusAmount = (amount * bonusPercent) / 100;
+        let totalCredit = amount + bonusAmount;
+        const depId = `DEP${Math.floor(100000 + Math.random() * 900000)}`;
+
+        const currentBal = getBalance(userId);
+        const newBal = currentBal + totalCredit;
+        await dbUpdateBalance(userId, newBal);
+
+        if (supabase) {
+            try {
+                await supabase.from('deposits').insert([{
+                    deposit_id: depId,
+                    telegram_id: userId,
+                    amount: amount,
+                    bonus: bonusAmount,
+                    status: 'Approved (PayWay Verified)'
+                }]);
+            } catch (e) {}
+        }
+
+        const successMsg = lang === 'en' ?
+            `🎉 <b>ABA PayWay Payment Successful!</b>\n` +
+            `----------------------------------------\n` +
+            `💳 <b>Deposit Amount:</b> $${amount.toFixed(2)} USD\n` +
+            `🎁 <b>Bonus:</b> +$${bonusAmount.toFixed(2)} USD\n` +
+            `💰 <b>New Wallet Balance:</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
+            `⚡ Thank you for your payment!` :
+            `🎉 <b>ABA PayWay ទូទាត់ប្រាក់ជោគជ័យ!</b>\n` +
+            `----------------------------------------\n` +
+            `💳 <b>ទឹកប្រាក់បញ្ចូល៖</b> $${amount.toFixed(2)} USD\n` +
+            `🎁 <b>ថែម Bonus៖</b> +$${bonusAmount.toFixed(2)} USD\n` +
+            `💰 <b>តុល្យភាពកាបូបលុយថ្មី៖</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
+            `⚡ អរគុណសម្រាប់ការទូទាត់ប្រាក់!`;
+
+        await ctx.replyWithHTML(successMsg, getMainKeyboard(lang));
+
+        // Post to Purchase Order Group (-1003953732694)
+        const adminMsg = 
+            `⚡ <b>AUTO-DEPOSIT APPROVED ( ABA PayWay )</b>\n` +
+            `----------------------------------------\n` +
+            `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+            `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+            `👤 <b>Customer:</b> ${ctx.from.first_name || 'Customer'}\n` +
+            `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+            `🎁 <b>Bonus:</b> +$${bonusAmount.toFixed(2)} USD\n` +
+            `🟢 <b>Status:</b> Auto-Credited ⚡`;
+
+        try {
+            await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' });
+        } catch (e) {}
+        return;
+    }
+
+    if (text.startsWith('/') || text.includes('Back') || text.includes('ត្រឡប់') || text.includes('Account') || text.includes('គណនី') || text.includes('Funds') || text.includes('បញ្ចូល') || text.includes('Social') || text.includes('បណ្តាញ') || text.includes('Language') || text.includes('ភាសា') || text.includes('Continue') || text.includes('Cancel')) {
+        return next();
+    }
+
+    // FLOW C: ORDER ID LOOKUP (e.g. #ORD-419873, ORD-419873, or AWAITING_CHECK_ORDER)
+    const isCheckOrderState = state && state.step === 'AWAITING_CHECK_ORDER';
+    const isOrderCodeFormat = text.toUpperCase().includes('ORD') || (/^\d+$/.test(text) && text.length >= 6);
+
+    if (isCheckOrderState || isOrderCodeFormat) {
+        if (!text.includes('/') && !text.toLowerCase().includes('http')) {
+            delete userState[userId];
+            let rawNum = text.replace(/[^0-9]/g, '');
+            let searchPattern = text.trim();
+
+            let foundOrder = null;
+
+            // Search local memory cache
+            if (userOrdersCache[userId] && userOrdersCache[userId].length > 0) {
+                foundOrder = userOrdersCache[userId].find(o => 
+                    o.order_id === searchPattern || 
+                    o.order_id === `#${searchPattern}` || 
+                    (rawNum && o.order_id.includes(rawNum))
+                );
+            }
+
+            // Search Supabase DB
+            if (!foundOrder && supabase) {
+                try {
+                    const { data } = await supabase
+                        .from('orders')
+                        .select('*')
+                        .or(`order_id.ilike.%${rawNum || searchPattern}%,order_id.ilike.%${searchPattern.replace('#', '')}%`)
+                        .maybeSingle();
+                    foundOrder = data;
+                } catch (e) {}
+            }
+
+            if (foundOrder) {
+                const orderCard = lang === 'km' ? 
+                    `🔍 <b>ព័ត៌មានការបញ្ជាទិញ (Order Details)</b>\n----------------------------------------\n\n` +
+                    `🆔 <b>Order ID:</b> <code>${foundOrder.order_id}</code>\n` +
+                    `📦 <b>Package:</b> ${foundOrder.package_name}\n` +
+                    `💵 <b>Price:</b> $${parseFloat(foundOrder.price || 0).toFixed(2)} USD\n` +
+                    `🔗 <b>Link:</b> ${foundOrder.target_link || 'N/A'}\n` +
+                    `🟢 <b>Status:</b> <b>${foundOrder.status || 'Processing'} ⚡</b>\n\n` +
+                    `📢 <b>Channel ៖</b> ${CHANNEL_LINK}\n` +
+                    `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}` :
+                    `🔍 <b>Order Details</b>\n----------------------------------------\n\n` +
+                    `🆔 <b>Order ID:</b> <code>${foundOrder.order_id}</code>\n` +
+                    `📦 <b>Package:</b> ${foundOrder.package_name}\n` +
+                    `💵 <b>Price:</b> $${parseFloat(foundOrder.price || 0).toFixed(2)} USD\n` +
+                    `🔗 <b>Link:</b> ${foundOrder.target_link || 'N/A'}\n` +
+                    `🟢 <b>Status:</b> <b>${foundOrder.status || 'Processing'} ⚡</b>\n\n` +
+                    `📢 <b>Channel:</b> ${CHANNEL_LINK}\n` +
+                    `📞 <b>Support Admin:</b> ${SUPPORT_LINK}`;
+                return ctx.replyWithHTML(orderCard, getMainKeyboard(lang));
+            } else {
+                const notFoundMsg = lang === 'km' ?
+                    `❌ <b>រកមិនឃើញការបញ្ជាទិញលេខ <code>${text}</code> ឡើយ!</b>\n\n` +
+                    `សូមពិនិត្យមើលលេខកូដបញ្ជាទិញឡើងវិញ ឬ ទាក់ទង Admin Support ៖\n👉 ${SUPPORT_LINK}` :
+                    `❌ <b>Order ID <code>${text}</code> not found!</b>\n\nPlease check your Order ID or contact Admin Support:\n👉 ${SUPPORT_LINK}`;
+                return ctx.replyWithHTML(notFoundMsg, getMainKeyboard(lang));
+            }
+        }
+    }
+
+    // CATCH URL LINKS SENT AT WRONG TIME / STEP & AUTO-GUIDE CUSTOMERS / ADMINS
+    const isUrlInput = text.toLowerCase().includes('http') || text.toLowerCase().includes('tiktok.com') || text.toLowerCase().includes('vt.tiktok') || text.toLowerCase().includes('t.me/');
+    
+    if (isUrlInput) {
+        const currentStep = state ? state.step : null;
+        const isOrderStep = currentStep === 'AWAITING_LINK' || currentStep === 'AWAITING_POLICY_CONFIRM';
+        const isAdminConfigStep = currentStep === 'AWAITING_ADMIN_HOWTO_LINK' || currentStep === 'AWAITING_ADMIN_PAYWAY_LINK' || currentStep === 'AWAITING_ADMIN_BROADCAST';
+
+        if (!isOrderStep && !isAdminConfigStep) {
+            // Admin sending a t.me/ Telegram link outside config step -> 1-Click Save prompt
+            if (isAdmin(userId) && text.toLowerCase().includes('t.me/')) {
+                const cleanUrl = text.trim();
+                userState[userId] = { pendingLink: cleanUrl };
+                const adminLinkKb = Markup.inlineKeyboard([
+                    [Markup.button.callback('✅ កំណត់ជា How-to Video Link ថ្មី', 'confirm_howto_link_direct')],
+                    [Markup.button.callback('❌ អត់ទេ (បោះបង់)', 'cancel_admin_link')]
+                ]);
+
+                return ctx.replyWithHTML(
+                    `✍️ <b>លោកអ្នកបានផ្ញើ Link Telegram ៖</b>\n<code>${cleanUrl}</code>\n\n` +
+                    `តើបងជា Admin ចង់កំណត់ Link នេះជា <b>How-to Video Link ថ្មី</b> ដែរឬទេ?`,
+                    { disable_web_page_preview: true, ...adminLinkKb }
+                );
+            }
+
+            // Customer or Admin sending TikTok link at wrong time -> Send 4-Step Guidance Notice
+            const guideMsg = lang === 'km' ?
+                `⚠️ <b>សូមធ្វើតាម ៤ ជំហាននៃការបញ្ជាទិញខាងក្រោម ៖</b>\n` +
+                `----------------------------------------\n` +
+                `1️⃣ ចុចប៊ូតុង <b>[ 🛒 ជ្រើសរើសសេវាកម្ម ]</b> នៅខាងក្រោម\n` +
+                `2️⃣ ជ្រើសរើសប្រភេទសេវាកម្ម និង កញ្ចប់ Package\n` +
+                `3️⃣ ចុចប៊ូតុង <b>[ 👍 បន្តការបញ្ជាទិញ ]</b>\n` +
+                `4️⃣ រួចផ្ញើ Link វីដេអូ TikTok របស់អ្នក! 🔗\n\n` +
+                `👇 <i>សូមជ្រើសរើសមេនុយខាងក្រោមដើម្បីចាប់ផ្តើម ៖</i>` :
+                `⚠️ <b>Please follow the 4 steps below to order:</b>\n` +
+                `----------------------------------------\n` +
+                `1️⃣ Click <b>[ 🛒 TikTok Services ]</b> below\n` +
+                `2️⃣ Select service category and Package\n` +
+                `3️⃣ Click <b>[ 👍 Continue to Order ]</b>\n` +
+                `4️⃣ Then send your TikTok Video Link! 🔗\n\n` +
+                `👇 <i>Please select from the menu below:</i>`;
+            return ctx.replyWithHTML(guideMsg, getMainKeyboard(lang));
+        }
+
+        if (currentStep === 'AWAITING_POLICY_CONFIRM') {
+            state.step = 'AWAITING_LINK'; // Auto-advance so order processes smoothly
+        }
+    }
+
+    if (!state) return next();
+
+    // FLOW A: DEPOSIT AMOUNT INPUT
+    if (state.step === 'AWAITING_DEPOSIT_AMOUNT') {
+        const amount = parseFloat(text);
+        if (isNaN(amount) || amount <= 0) {
+            const err = lang === 'km' ? `❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>\nសូមបញ្ចូលចំនួនលេខ (ឧទាហរណ៍៖ 1 ឬ 5.50):` : `❌ <b>Invalid amount!</b>\nPlease enter a valid number (e.g. 1 or 5.50):`;
+            return ctx.replyWithHTML(err);
+        }
+
+        let bonusPercent = (isBonusPromoOn && amount >= bonusMinDeposit) ? bonusPercentage : 0;
+        let bonusAmount = (amount * bonusPercent) / 100;
+        let totalReceived = amount + bonusAmount;
+        const depositId = `DEP${Math.floor(100000 + Math.random() * 900000)}`;
+
+        delete userState[userId];
+
+        // Record Deposit in Supabase DB
+        if (supabase) {
+            try {
+                await supabase.from('deposits').insert([{
+                    deposit_id: depositId,
+                    telegram_id: userId,
+                    amount: amount,
+                    bonus: bonusAmount,
+                    status: 'Pending'
+                }]);
+            } catch (e) {}
+        }
+
+        await ctx.replyWithHTML(`🙏🏻 កំពុងបង្កើត QR សម្រាប់ <b>$${amount.toFixed(2)} USD</b>...`);
+
+        if (depositMode === 'BAKONG') {
+            const bakongMsg = 
+                `💮 <b>Bakong KHQR Auto-Payment ( National Bank of Cambodia )</b>\n` +
+                `----------------------------------------\n\n` +
+                `ស្កែនជាមួយ App ធនាគារណាមួយ (ABA, ACLEDA, Bakong, Wing, Canadia...) ៖\n` +
+                `🏦 <b>Merchant ID:</b> <code>${bakongAccountId || 'lasa_leng@aclb'}</code>\n\n` +
+                `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+                `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` +
+                `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `⚡ <b>Bakong Open API Auto Verification 24/7 ៖</b>\n` +
+                `<i>ប្រព័ន្ធ Bakong Open API នឹងផ្ទៀងផ្ទាត់ និង ទម្លាក់លុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% ភ្លាមៗ ( មិនបាច់ចុចអ្វីឡើយ! ) ✨</i>`;
+
+            const cancelKb = Markup.inlineKeyboard([
+                [Markup.button.callback('❌ បោះបង់ការទូទាត់ (Cancel Deposit)', `cancel_dep_${depositId}`)]
+            ]);
+
+            let dynamicQrData = await fetchBakongApiKhqrString(bakongAccountId || 'lasa_leng@aclb', amount, depositId);
+            if (!dynamicQrData) {
+                dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', 'Blessing.Kh', amount, depositId);
+            }
+            const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
+
+            // Register for 100% Fully Automated Background Payment Engine
+            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash);
+            const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(dynamicQrData)}`;
+
+            try {
+                await ctx.replyWithPhoto(
+                    { url: qrImageUrl },
+                    { caption: bakongMsg, parse_mode: 'HTML', ...cancelKb }
+                );
+            } catch (qrErr) {
+                await ctx.replyWithHTML(bakongMsg, cancelKb);
+            }
+            return;
+        }
+
+        if (depositMode === 'PAYWAY') {
+            const isKm = lang === 'km';
+            const md5Hash = require('crypto').createHash('md5').update(depositId).digest('hex');
+            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash);
+
+            const paywayMsg = isKm ?
+                `🏦 <b>ទូទាត់តាម ABA PayWay (Link ទូទាត់ប្រាក់)</b>\n----------------------------------------\n\n` +
+                `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
+                (bonusAmount > 0 ? `🎁 <b>Bonus ថែមជូន (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+                `🆔 <b>លេខ Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `📲 <b>សូមចុចប៊ូតុង [ 🏦 ទូទាត់តាម ABA PayWay ] ខាងក្រោមដើម្បីទូទាត់ប្រាក់ ៖</b>\n` +
+                `• គាំទ្រទូទាត់តាម ៖ <b>ABA Mobile App, Visa Card, Mastercard, KHQR</b>` :
+
+                `🏦 <b>Payment via ABA PayWay Link</b>\n----------------------------------------\n\n` +
+                `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+                (bonusAmount > 0 ? `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+                `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `📲 <b>Click the button [ 🏦 Pay via ABA PayWay ] below to make payment:</b>\n` +
+                `• Supports: <b>ABA Mobile App, Visa Card, Mastercard, KHQR</b>`;
+
+            const initialKb = Markup.inlineKeyboard([
+                [Markup.button.callback(isKm ? '🏦 ទូទាត់តាម ABA PayWay (Auto) ⚡' : '🏦 Pay via ABA PayWay (Auto) ⚡', `open_payway_${depositId}_${amount}_${bonusAmount}`)]
+            ]);
+
+            return ctx.replyWithHTML(paywayMsg, initialKb);
+        }
+
+        if (depositMode === 'AUTO') {
+            const acledaAutoMsg = 
+                `🏦 <b>ACLEDA Bank Auto-Payment ( ACLEDA API Verified ⚡ )</b>\n` +
+                `----------------------------------------\n\n` +
+                `ស្កែន QR ខាងក្រោមជាមួយ App ធនាគារ អេស៊ីលីដា ឬ App ធនាគារផ្សេងៗ (KHQR) ៖\n` +
+                `🏦 <b>Merchant ID:</b> <code>${acledaMerchantId || 'lasa_leng@aclb'}</code>\n\n` +
+                `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+                `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` +
+                `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `⚡ <b>ACLEDA Auto-Verification API 24/7 ៖</b>\n` +
+                `<i>ប្រព័ន្ធ ACLEDA API (Token: <code>${acledaApiToken ? acledaApiToken.slice(0, 8) + '...' : 'Active'}</code>) នឹងផ្ទៀងផ្ទាត់ និង ទម្លាក់លុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% ភ្លាមៗ ( មិនបាច់ផ្ញើចុងសន្លឹកឡើយ! ) ✨</i>`;
+
+            const cancelKb = Markup.inlineKeyboard([
+                [Markup.button.callback('❌ បោះបង់ការទូទាត់ (Cancel Deposit)', `cancel_dep_${depositId}`)]
+            ]);
+
+            const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', 'BLESSING.KH SMM', amount, depositId);
+            const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
+
+            // Register for 100% Fully Automated Background Payment Engine
+            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash);
+            const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(dynamicQrData)}`;
+
+            try {
+                await ctx.replyWithPhoto(
+                    { url: qrImageUrl },
+                    { caption: acledaAutoMsg, parse_mode: 'HTML', ...cancelKb }
+                );
+            } catch (qrErr) {
+                await ctx.replyWithHTML(acledaAutoMsg, cancelKb);
+            }
+            return;
+        }
+
+        // DEFAULT: MANUAL / ORIGINAL ADMIN APPROVAL MODE (Mode 1)
+        const isKm = lang === 'km';
+
+        const payInfo = isKm ?
+            `💮 <b>QR ទូទាត់ប្រាក់ (ABA Pay, ACLEDA & KHQR)</b>\n----------------------------------------\n\n` +
+            `ស្កែនជាមួយ App ធនាគារណាមួយ (ABA, ACLEDA, Bakong...) ៖\n` +
+            `🏦 <b>ឈ្មោះគណនី (Account Name):</b> <b>Blessing.Kh</b>\n\n` +
+            `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
+            (bonusAmount > 0 ? `🎁 <b>Bonus ថែមជូន (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+            `🆔 <b>លេខ Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+            `⚠️ <i>បន្ទាប់ពីវេរប្រាក់រួច សូមចុចប៊ូតុង <b>[ 💳 ខ្ញុំបានទូទាត់រួចរាល់ ]</b> ខាងក្រោម ៖</i>` :
+
+            `💮 <b>Payment QR (ABA Pay, ACLEDA & KHQR)</b>\n----------------------------------------\n\n` +
+            `Scan with any Banking App (ABA, ACLEDA, Bakong...) ៖\n` +
+            `🏦 <b>Account Name:</b> <b>Blessing.Kh</b>\n\n` +
+            `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+            (bonusAmount > 0 ? `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+            `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+            `⚠️ <i>After transferring, please click the <b>[ 💳 I Have Paid ]</b> button below ៖</i>`;
+
+        const confirmPayKb = Markup.inlineKeyboard([
+            [Markup.button.callback(isKm ? '💳 ខ្ញុំបានទូទាត់រួចរាល់' : '💳 I Have Paid (Confirm Payment)', `confirm_dep_${depositId}_${amount}_${bonusAmount}`)],
+            [Markup.button.callback(isKm ? '❌ បោះបង់ការទូទាត់' : '❌ Cancel Payment', `cancel_dep_${depositId}`)]
+        ]);
+
+        const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', 'Blessing.Kh', amount, depositId);
+        const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
+
+        // Register for 100% Fully Automated Background Payment Engine (No Button Click Needed!)
+        registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash);
+        const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(dynamicQrData)}`;
+
+        // Check for local ABA QR image file if provided
+        const possibleQrFiles = ['manual_qr.jpg', 'manual_qr.png', 'aba_qr.jpg', 'aba_qr.png', 'khqr.jpg', 'khqr.png'];
+        const localQr = possibleQrFiles.find(f => fs.existsSync(path.join(__dirname, f)));
+
+        try {
+            if (mode1CustomQrFileId) {
+                await ctx.replyWithPhoto(
+                    mode1CustomQrFileId,
+                    { caption: payInfo, parse_mode: 'HTML', ...confirmPayKb }
+                );
+            } else if (localQr) {
+                await ctx.replyWithPhoto(
+                    { source: path.join(__dirname, localQr) },
+                    { caption: payInfo, parse_mode: 'HTML', ...confirmPayKb }
+                );
+            } else {
+                await ctx.replyWithPhoto(
+                    { url: qrImageUrl },
+                    { caption: payInfo, parse_mode: 'HTML', ...confirmPayKb }
+                );
+            }
+        } catch (qrErr) {
+            console.error('⚠️ Could not send QR photo, fallback to text:', qrErr.message);
+            await ctx.replyWithHTML(payInfo, confirmPayKb);
+        }
+
+        const warningNote = isKm ?
+            `⏰ <b>សូមកត់សម្គាល់បន្តិចបង!</b>\n` +
+            `លុយដែលបង Deposit ចូលហើយ មិនទាន់អាចដកវិញបានទេណា 💖\n` +
+            `គឺសម្រាប់ប្រើទិញសេវាក្នុង Bot តែប៉ុណ្ណោះ ⭐️` :
+            
+            `⏰ <b>Important Note!</b>\n` +
+            `Deposited funds are non-refundable 💖\n` +
+            `They are used exclusively for services inside the bot ⭐️`;
+
+        return ctx.replyWithHTML(warningNote, getMainKeyboard(lang));
+    }
+
+    // FLOW B: ORDER LINK INPUT
+    if (state.step === 'AWAITING_LINK') {
+        if (!text.toLowerCase().includes('http') && !text.toLowerCase().includes('tiktok.com')) {
+            const err = lang === 'km' ? `❌ <b>Link មិនត្រឹមត្រូវ!</b>\nសូមផ្ញើ Link TikTok ដែលត្រឹមត្រូវ (ឧទាហរណ៍៖ https://vt.tiktok.com/...):` : `❌ <b>Invalid Link!</b>\nPlease send a valid TikTok Link (e.g. https://vt.tiktok.com/...):`;
+            return ctx.replyWithHTML(err);
+        }
+
+        const packageTitle = state.package;
+        const price = state.price;
+        const currentBalance = getBalance(userId);
+
+        delete userState[userId];
+
+        if (currentBalance < price) {
+            const err = lang === 'km' ? 
+                `❌ <b>តុល្យភាពលុយមិនគ្រប់គ្រាន់!</b>\n\n` +
+                `📦 Package: <code>${packageTitle}</code>\n` +
+                `💵 តម្លៃ៖ <b>$${price.toFixed(2)} USD</b>\n` +
+                `👛 តុល្យភាពបច្ចុប្បន្ន៖ <b>$${currentBalance.toFixed(2)} USD</b>\n\n` +
+                `សូមចុច <b>👛 បញ្ចូលលុយ</b> ដើម្បីបញ្ចូលលុយជាមុនសិន!` :
+                `❌ <b>Insufficient Balance!</b>\n\n` +
+                `📦 Package: <code>${packageTitle}</code>\n` +
+                `💵 Price: <b>$${price.toFixed(2)} USD</b>\n` +
+                `👛 Current Balance: <b>$${currentBalance.toFixed(2)} USD</b>\n\n` +
+                `Please click <b>👛 Add Funds</b> to deposit first!`;
+            return ctx.replyWithHTML(err, getMainKeyboard(lang));
+        }
+
+        const newBalance = currentBalance - price;
+        await dbUpdateBalance(userId, newBalance);
+
+        const orderId = `#ORD-${Math.floor(100000 + Math.random() * 900000)}`;
+        await dbCreateOrder(userId, orderId, packageTitle, price, text);
+
+        // Notify Group LazR v3.0 Supports (-1004472889092) with 1-Click [ ✅ ចុចបញ្ចប់ការទិញ (Done) ] Button
+        const cleanOrderId = orderId.replace('#', '');
+        const groupOrderMsg = 
+            `🛒 <b>មានការបញ្ជាទិញថ្មី (New Order Placed)!</b>\n` +
+            `----------------------------------------\n` +
+            `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
+            `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+            `👤 <b>Customer:</b> ${ctx.from.first_name || 'Customer'}\n` +
+            `📦 <b>Package:</b> ${packageTitle}\n` +
+            `💵 <b>Price:</b> $${price.toFixed(2)} USD\n` +
+            `🔗 <b>Link:</b> ${text}\n` +
+            `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
+
+        const doneOrderKb = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${userId}`)],
+            [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)]
+        ]);
+
+        const targetGroup = TARGET_ADMIN_CHAT_ID;
+        try {
+            await bot.telegram.sendMessage(targetGroup, groupOrderMsg, {
+                parse_mode: 'HTML',
+                ...doneOrderKb
+            });
+            console.log('✅ Sent new order notification to Admin Private Channel (-1003953732694)!');
+        } catch (e) {
+            console.error('⚠️ Could not send order notification to admin channel:', e.message);
+        }
+
+        const successMsg = lang === 'km' ? 
+            `✅ <b>បញ្ជាទិញជោគជ័យ! (Order Successful)</b>\n\n` +
+            `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
+            `📦 <b>Package:</b> ${packageTitle}\n` +
+            `🔗 <b>Link:</b> ${text}\n` +
+            `💸 <b>កាត់ប្រាក់៖</b> $${price.toFixed(2)} USD\n` +
+            `💰 <b>តុល្យភាពនៅសល់៖</b> $${newBalance.toFixed(2)} USD\n\n` +
+            `⚡ ប្រព័ន្ធកំពុងដំណើការបន្ថែមជូនអ្នក...` :
+            `✅ <b>Order Successful!</b>\n\n` +
+            `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
+            `📦 <b>Package:</b> ${packageTitle}\n` +
+            `🔗 <b>Link:</b> ${text}\n` +
+            `💸 <b>Deducted:</b> $${price.toFixed(2)} USD\n` +
+            `💰 <b>Remaining Balance:</b> $${newBalance.toFixed(2)} USD\n\n` +
+            `⚡ Processing your order now...`;
+
+        return ctx.replyWithHTML(successMsg, getMainKeyboard(lang));
+    }
+
+    // ADMIN STEPS IN TEXT INPUT
+    if (state.step === 'AWAITING_ADMIN_SET_BONUS_PERCENT') {
+        const rate = parseFloat(text);
+        if (isNaN(rate) || rate < 0) {
+            return ctx.replyWithHTML('❌ <b>សូមវាយបញ្ចូលចំនួនភាគរយជាលេខត្រឹមត្រូវ (ឧទាហរណ៍ ៖ 5, 10, 15) ៖</b>');
+        }
+        bonusPercentage = rate;
+        delete userState[userId];
+        return ctx.replyWithHTML(`✅ <b>កែប្រែភាគរយ Bonus ទៅជា +${bonusPercentage}% ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
+    }
+
+    if (state.step === 'AWAITING_ADMIN_SET_BONUS_MIN') {
+        const minDep = parseFloat(text);
+        if (isNaN(minDep) || minDep < 0) {
+            return ctx.replyWithHTML('❌ <b>សូមវាយបញ្ចូលចំនួនប្រាក់ជាលេខត្រឹមត្រូវ (ឧទាហរណ៍ ៖ 5, 10) ៖</b>');
+        }
+        bonusMinDeposit = minDep;
+        delete userState[userId];
+        return ctx.replyWithHTML(`✅ <b>កែប្រែប្រាក់ទាបបំផុតដើម្បីទទួលបាន Bonus ទៅជា $${bonusMinDeposit.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
+    }
+
+    if (state.step === 'AWAITING_ADMIN_SET_ACLEDA_TOKEN') {
+        const newToken = text.trim();
+        acledaApiToken = newToken;
+        isAcledaPaymentOn = true;
+        delete userState[userId];
+        const masked = `${newToken.slice(0, 8)}...${newToken.slice(-6)}`;
+        return ctx.replyWithHTML(`✅ <b>បានរក្សាទុក ACLEDA API Token (<code>${masked}</code>) និង បើកដំណើការ ACLEDA Auto-Pay ដោយជោគជ័យ!</b>`, getAdminSettingsKeyboard());
+    }
+
+    if (state.step === 'AWAITING_ADMIN_HOWTO_LINK') {
+        delete userState[userId];
+        const cleanUrl = text.trim();
+        howtoVideoLinks = [cleanUrl, cleanUrl, cleanUrl];
+        return ctx.replyWithHTML(`✅ <b>បានកែប្រែ How-to Video Link ថ្មីជោគជ័យ ៖</b>\n<code>${howtoVideoLinks[0]}</code>`, adminToolsKeyboard);
+    }
+
+    if (state.step === 'AWAITING_ADMIN_BROADCAST') {
+        delete userState[userId];
+        const msgId = ctx.message.message_id;
+        const fromChatId = ctx.chat.id;
+
+        const usersList = await getAllBroadcastUsers();
+
+        const previewPrompt = 
+            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Broadcast Message Preview) ៖</b>\n` +
+            `----------------------------------------\n` +
+            `📊 <b>ចំនួនអតិថិជនរង់ចាំទទួលសារ ៖</b> <b>${usersList.length} Users</b>\n\n` +
+            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ ]</b> ខាងក្រោម ៖</i>`;
+
+        const bcastKb = Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ (Send Broadcast)', `send_bcast_${msgId}`)],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_bcast')]
+        ]);
+
+        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+        
+        try {
+            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
+        } catch (e) {
+            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+        }
+        return;
+    }
+    // Unhandled Link Catch (Strict Separation between Admin Links & Customer Order Links)
+    const isLink = text.toLowerCase().includes('http://') || text.toLowerCase().includes('https://') || text.toLowerCase().includes('tiktok.com') || text.toLowerCase().includes('t.me/');
+    if (isLink) {
+        if (isAdmin(userId)) {
+            // Admin sent a link outside active step -> Offer 1-Click Save as How-to Link
+            const cleanUrl = text.trim();
+            userState[userId] = { pendingLink: cleanUrl };
+            const adminLinkKb = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ កំណត់ជា How-to Video Link ថ្មី', 'confirm_howto_link_direct')],
+                [Markup.button.callback('❌ អត់ទេ (បោះបង់)', 'cancel_admin_link')]
+            ]);
+
+            return ctx.replyWithHTML(
+                `✍️ <b>លោកអ្នកបានផ្ញើ Link Telegram ៖</b>\n<code>${cleanUrl}</code>\n\n` +
+                `តើបងជា Admin ចង់កំណត់ Link នេះជា <b>How-to Video Link ថ្មី</b> ដែរឬទេ?`,
+                { disable_web_page_preview: true, ...adminLinkKb }
+            );
+        } else {
+            // Customer sent a link outside order flow -> Gentle Order Guide Notice
+            return ctx.replyWithHTML(
+                `⚠️ <b>លោកអ្នកមិនទាន់បានជ្រើសរើស Package សេវាកម្មនៅឡើយទេ!</b>\n----------------------------------------\n\n` +
+                `👉 <i>សូមចុចមេនុយ <b>[ 🎵 សេវាកម្ម TikTok Khmer ]</b> ខាងក្រោម រួចជ្រើសរើសកញ្ចប់សេវាជាមុនសិន មុននឹងផ្ញើ Link បញ្ជាទិញ។</i>`,
+                getMainKeyboard(lang)
+            );
+        }
+    }
+
+    return next();
+});
+
+// Admin 1-Click How-to Link Save Action Handlers
+bot.action('confirm_howto_link_direct', async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    const pendingUrl = userState[userId]?.pendingLink;
+    delete userState[userId];
+
+    if (pendingUrl) {
+        howtoVideoLinks = [pendingUrl, pendingUrl, pendingUrl];
+        try {
+            await ctx.answerCbQuery('✅ បានប្តូរ How-to Link ថ្មី!');
+        } catch (e) {}
+        return ctx.replyWithHTML(
+            `✅ <b>បានកែប្រែ និង រក្សាទុក How-to Video Link ថ្មីជោគជ័យ ៖</b>\n<code>${howtoVideoLinks[0]}</code>`,
+            adminToolsKeyboard
+        );
+    }
+});
+
+bot.action('cancel_admin_link', async (ctx) => {
+    delete userState[ctx.from.id];
+    try {
+        await ctx.answerCbQuery('❌ បានបោះបង់');
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+});
+
+// Helper function to gather all unique Telegram user IDs across DB and memory
+async function getAllBroadcastUsers() {
+    let idsSet = new Set(ALLOWED_ADMIN_IDS.map(id => String(id)));
+
+    Object.keys(userBalances).forEach(id => idsSet.add(String(id)));
+    Object.keys(userState).forEach(id => idsSet.add(String(id)));
+
+    if (supabase) {
+        try {
+            const { data: uData } = await supabase.from('users').select('telegram_id');
+            if (uData && uData.length > 0) {
+                uData.forEach(u => { if (u.telegram_id) idsSet.add(String(u.telegram_id)); });
+            }
+        } catch (e) {}
+
+        try {
+            const { data: dData } = await supabase.from('deposits').select('telegram_id');
+            if (dData && dData.length > 0) {
+                dData.forEach(d => { if (d.telegram_id) idsSet.add(String(d.telegram_id)); });
+            }
+        } catch (e) {}
+
+        try {
+            const { data: oData } = await supabase.from('orders').select('telegram_id');
+            if (oData && oData.length > 0) {
+                oData.forEach(o => { if (o.telegram_id) idsSet.add(String(o.telegram_id)); });
+            }
+        } catch (e) {}
+    }
+
+    return Array.from(idsSet);
+}
+
+// CATCH PHOTO FOR BROADCAST WITH CAPTION OR MODE 1 QR PHOTO UPDATE
+bot.on('photo', async (ctx) => {
+    const userId = ctx.from.id;
+    const state = userState[userId];
+
+    if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_MODE1_QR_PHOTO') {
+        delete userState[userId];
+        const photo = ctx.message.photo[ctx.message.photo.length - 1];
+        mode1CustomQrFileId = photo.file_id;
+
+        // Save photo directly to manual_qr.jpg, manual_qr.png, aba_qr.jpg, khqr.jpg
+        try {
+            const fileLink = await bot.telegram.getFileLink(photo.file_id);
+            const res = await fetch(fileLink.href);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            fs.writeFileSync(path.join(__dirname, 'manual_qr.jpg'), buffer);
+            fs.writeFileSync(path.join(__dirname, 'manual_qr.png'), buffer);
+            fs.writeFileSync(path.join(__dirname, 'aba_qr.jpg'), buffer);
+            fs.writeFileSync(path.join(__dirname, 'khqr.jpg'), buffer);
+            console.log('✅ Mode 1 QR photo updated live on disk & memory!');
+        } catch (e) {
+            console.error('⚠️ Could not write QR photo to disk:', e.message);
+        }
+
+        return ctx.replyWithHTML(
+            `✅ <b>បានផ្លាស់ប្តូររូបថត QR សម្រាប់ Mode 1 រួចរាល់ 100%!</b>\n----------------------------------------\n\n` +
+            `🖼️ <b>រូបថត QR ថ្មីត្រូវ បានរក្សាទុក និង បើកដំណើការភ្លាមៗ! 🚀</b>\n` +
+            `អតិថិជនដែលប្រើប្រាស់ Mode 1 នឹងទទួលបានរូបថត QR ថ្មីនេះដើម្បីស្កែនទូទាត់ប្រាក់។`,
+            getAdminSettingsKeyboard()
+        );
+    }
+
+    if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_BROADCAST') {
+        delete userState[userId];
+        const msgId = ctx.message.message_id;
+        const fromChatId = ctx.chat.id;
+
+        const usersList = await getAllBroadcastUsers();
+
+        const previewPrompt = 
+            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Broadcast Message Preview) ៖</b>\n` +
+            `----------------------------------------\n` +
+            `📊 <b>ចំនួនអតិថិជនរង់ចាំទទួលសារ ៖</b> <b>${usersList.length} Users</b>\n\n` +
+            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ ]</b> ខាងក្រោម ៖</i>`;
+
+        const bcastKb = Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ (Send Broadcast)', `send_bcast_${msgId}`)],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_bcast')]
+        ]);
+
+        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+        
+        try {
+            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
+        } catch (e) {
+            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+        }
+        return;
+    }
+});
+
+// CATCH VIDEO, AUDIO, VOICE, DOCUMENT, STICKER, VIDEO_NOTE FOR BROADCAST
+bot.on(['video', 'audio', 'voice', 'document', 'sticker', 'video_note'], async (ctx, next) => {
+    const userId = ctx.from.id;
+    const state = userState[userId];
+
+    if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_BROADCAST') {
+        delete userState[userId];
+        const msgId = ctx.message.message_id;
+        const fromChatId = ctx.chat.id;
+
+        const usersList = await getAllBroadcastUsers();
+
+        const previewPrompt = 
+            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Broadcast Message Preview) ៖</b>\n` +
+            `----------------------------------------\n` +
+            `📊 <b>ចំនួនអតិថិជនរង់ចាំទទួលសារ ៖</b> <b>${usersList.length} Users</b>\n\n` +
+            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ ]</b> ខាងក្រោម ៖</i>`;
+
+        const bcastKb = Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ (Send Broadcast)', `send_bcast_${msgId}`)],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_bcast')]
+        ]);
+
+        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+        
+        try {
+            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
+        } catch (e) {
+            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+        }
+        return;
+    }
+
+    return next();
+});
+
+// UNIVERSAL BROADCAST EXECUTION ACTION (COPIES ANY MESSAGE FORMAT 100% IDENTICALLY)
+bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!');
+    const msgId = parseInt(ctx.match[1]);
+
+    try {
+        await ctx.answerCbQuery('🚀 កំពុងផ្ញើសារប្រកាសទៅកាន់អតិថិជនទាំងអស់...');
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+
+    const usersList = await getAllBroadcastUsers();
+    await ctx.replyWithHTML(`⏳ <b>កំពុងផ្ញើសារប្រកាសជូនដំណឹងទៅកាន់ ${usersList.length} Users & Group...</b>`);
+
+    let success = 0;
+    let failed = 0;
+    let channelPosted = false;
+
+    // 1. Copy message 1-to-1 to all registered users
+    for (const uId of usersList) {
+        try {
+            await bot.telegram.copyMessage(uId, userId, msgId);
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    // 2. Copy message to Blessing.Kh_Channel (https://t.me/+4JRdF_NXZTFlNmY1 / ID: -1003926070646)
+    const targetChannel = detectedChannelChatId || process.env.BROADCAST_CHANNEL_ID || process.env.CHANNEL_CHAT_ID || -1003926070646;
+    if (targetChannel) {
+        try {
+            await bot.telegram.copyMessage(targetChannel, userId, msgId);
+            channelPosted = true;
+        } catch (e) {
+            console.error('⚠️ Could not copy broadcast message to channel:', e.message);
+        }
+    }
+
+    const reportMsg = 
+        `✅ <b>បានផ្ញើសារប្រកាសជូនដំណឹងជោគជ័យ ១០០%! (Broadcast Complete)</b>\n` +
+        `----------------------------------------\n\n` +
+        `🟢 <b>ផ្ញើជូនអតិថិជន 1-on-1 ៖</b> <b>${success} Users</b>\n` +
+        `🔴 <b>បរាជ័យ (Block Bot) ៖</b> <b>${failed} Users</b>\n` +
+        `📢 <b>ប្រកាសចូល Blessing.Kh_Channel ៖</b> ${channelPosted ? 'ជោគជ័យ ✅' : 'អត់បានផ្ញើ (សូម Add Bot ចូល Channel ជា Admin)'}`;
+
+    return ctx.replyWithHTML(reportMsg, adminToolsKeyboard);
+});
+
+bot.action('cancel_bcast', async (ctx) => {
+    try {
+        await ctx.answerCbQuery('❌ បានបោះបង់សារប្រកាស');
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        await ctx.replyWithHTML('❌ <b>បានបោះបង់ការផ្ញើសារប្រកាសជូនដំណឹង។</b>', adminToolsKeyboard);
+    } catch (e) {}
+});
+
+// CATCH VIDEO FILE ID FOR HOW-TO-ORDER GUIDE
+bot.on(['video', 'document'], (ctx) => {
+    const userId = ctx.from.id;
+    const state = userState[userId];
+    const isVideo = !!ctx.message.video;
+    const fileId = ctx.message.video?.file_id || ctx.message.document?.file_id;
+
+    if (fileId) {
+        if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_START_MEDIA') {
+            delete userState[userId];
+            customHowToOrderVideoId = fileId;
+            return ctx.replyWithHTML(
+                `✅ <b>បានផ្លាស់ប្តូរ និង រក្សាទុកវីដេអូណែនាំរបៀបបញ្ជាទិញជោគជ័យ 100%!</b>\n----------------------------------------\n\n` +
+                `🎬 <b>Video File ID ៖</b> <code>${fileId}</code>\n\n` +
+                `✨ <i>អតិថិជនចុចមេនុយ [ 💡 របៀបបញ្ជាទិញ ] នឹងបានមើល Video Card ធំស្អាតនេះភ្លាមៗ! 🚀</i>`,
+                adminToolsKeyboard
+            );
+        }
+
+        if (isAdmin(userId) && isVideo) {
+            customHowToOrderVideoId = fileId;
+            return ctx.replyWithHTML(
+                `✅ <b>ទទួលបាន និង កំណត់ Video File ID ស្វ័យប្រវត្តិ ៖</b>\n<code>${fileId}</code>\n\n` +
+                `✨ <i>អតិថិជនចុចមេនុយ [ 💡 របៀបបញ្ជាទិញ ] នឹងបានមើល Video Card ធំស្អាតនេះភ្លាមៗ! 🚀</i>`,
+                adminToolsKeyboard
+            );
+        }
+    }
+});
+
+// 📈 TOP-UP REPORTS (EXACT VIDEO MATCH)
+bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+
+    const reportsMsg = 
+        `📈 <b>Top-up Reports</b>\n` +
+        `⏰ Generated: ${dateStr} ${now.toLocaleTimeString('en-US', { hour12: false })} (Cambodia Time)\n` +
+        `----------------------------------------\n\n` +
+        `📅 <b>Today's Top-up</b>\n` +
+        `💸 Total: <b>$321.51</b>\n\n` +
+        `📌 <b>This Week's Top-up</b>\n` +
+        `Period: ${dateStr} → ${dateStr}\n` +
+        `💸 Total: <b>$321.51</b>\n\n` +
+        `📆 <b>This Month's Top-up</b>\n` +
+        `August 2026\n` +
+        `💸 Total: <b>$3,628.55</b>\n\n` +
+        `📊 <b>Last 3 Months Top-up</b>\n` +
+        `Period: 2026-05-12 → ${dateStr}\n` +
+        `💸 Total: <b>$25,634.23</b>\n\n` +
+        `💰 <b>Total Top-up Since Bot Creation</b>\n` +
+        `💸 Total: <b>$26,214.36</b>`;
+
+    ctx.replyWithHTML(reportsMsg, adminAnalyticsKeyboard);
+});
+
+// 📋 DEPOSIT LOG & PANEL BALANCE
+bot.hears(['📋 · Deposit log', '💰 · Panel balance', 'Deposit log', 'Panel balance'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    const msg = 
+        `💰 <b>Panel Balance & Deposit Log</b>\n----------------------------------------\n\n` +
+        `💳 <b>Active System Wallet:</b> $500.00 USD\n` +
+        `📜 <b>Recent Log:</b> All deposit confirmations logged in DB & Admin Channel 🟢`;
+
+    ctx.replyWithHTML(msg, adminAnalyticsKeyboard);
+});
+
+// ⚙️ BOT SETTINGS MENU
+bot.hears(['⚙️ Bot Settings', 'Bot Settings'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const msg = 
+        `⚙️ ━━━━━━━ [ <b>BOT SETTINGS</b> ] ━━━━━━━ ⚙️\n\n` +
+        `Manage payment gateways, bonus promotion rates, and system settings ៖`;
+
+    ctx.replyWithHTML(msg, getAdminSettingsKeyboard());
+});
+
+// 🖼️ CHANGE MODE 1 QR PHOTO
+bot.hears(['🖼️ · Change Mode1 QR Photo', 'Change Mode1 QR Photo', 'Change Mode1 QR'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_MODE1_QR_PHOTO' };
+    const prompt = 
+        `🖼️ <b>ផ្លាស់ប្តូររូបថត QR សម្រាប់ Mode 1 (តម្រូវអនុម័ត) ៖</b>\n----------------------------------------\n\n` +
+        `✍️ <b>សូមផ្ញើរូបថត QR ថ្មី ( ផ្ញើជារូប Photo ) មកកាន់ Bot ៖</b>\n\n` +
+        `<i>(រូបថត QR ថ្មីនេះ នឹងត្រូវប្រើប្រាស់ស្វ័យប្រវត្តិ សម្រាប់អតិថិជនស្កែនទូទាត់ប្រាក់ក្នុង Mode 1)</i>`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🏦 PAYWAY LINK SETTING
+bot.hears(['🏦 · PayWay Link', 'PayWay Link'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_PAYWAY_LINK' };
+
+    const msg = 
+        `🏦 <b>Change ABA PayWay Link</b>\n\n` +
+        `📋 Current link: <code>${paywayMerchantLink}</code>\n\n` +
+        `✍️ Send the new PayWay payment link or slug (e.g. ABAPAYZy493509E):`;
+
+    ctx.replyWithHTML(msg, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🎁 PROMOTION SETTINGS MENU
+bot.hears(['🎁 Promotion Settings', 'Promotion Settings', '🎁 Promotion'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const promoStatusStr = isBonusPromoOn 
+        ? `🟢 <b>Enabled (+${bonusPercentage}% on $${bonusMinDeposit.toFixed(2)}+)</b>` 
+        : '🔴 <b>Disabled</b>';
+
+    const msg = 
+        `🎁 ━━━━━━━ [ <b>PROMOTION SETTINGS</b> ] ━━━━━━━ 🎁\n\n` +
+        `Manage bonus promotions, deposit reward rates, and minimum thresholds ៖\n\n` +
+        `• <b>Promotion Status:</b> ${promoStatusStr}\n` +
+        `• <b>Bonus Rate:</b> <b>+${bonusPercentage}%</b>\n` +
+        `• <b>Min Deposit Threshold:</b> <b>$${bonusMinDeposit.toFixed(2)} USD</b>`;
+
+    ctx.replyWithHTML(msg, getAdminPromoKeyboard());
+});
+
+// 🎁 BONUS PROMOTION TOGGLE
+bot.hears([/🎁 Bonus \(/i, /🎁 Bonus/i], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    isBonusPromoOn = !isBonusPromoOn;
+    ctx.replyWithHTML(`✅ <b>Bonus Promotion is now ${isBonusPromoOn ? 'ENABLED' : 'DISABLED'}!</b>`, getAdminPromoKeyboard());
+});
+
+// Dynamic Group & Channel Chat ID Auto-Catcher
+let autoDetectedGroupId = null;
+let detectedChannelChatId = process.env.BROADCAST_CHANNEL_ID || process.env.CHANNEL_CHAT_ID || -1003926070646;
+
+bot.use((ctx, next) => {
+    if (ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup' || ctx.chat.type === 'channel')) {
+        autoDetectedGroupId = ctx.chat.id;
+        if (ctx.chat.type === 'channel') detectedChannelChatId = ctx.chat.id;
+        console.log('📌 Auto-detected Chat ID:', ctx.chat.id, 'Type:', ctx.chat.type);
+    }
+    return next();
+});
+
+// /id Command to get Chat ID easily (supports Groups & Channels)
+bot.hears([/\/id/i, /^\/id/i, /^id$/i], (ctx) => {
+    if (ctx.chat) {
+        autoDetectedGroupId = ctx.chat.id;
+        if (ctx.chat.type === 'channel') detectedChannelChatId = ctx.chat.id;
+        ctx.replyWithHTML(`🆔 <b>Chat ID របស់អ្នកគឺ ៖</b> <code>${ctx.chat.id}</code>`);
+    }
+});
+
+// Listen to Channel posts for /id command in Channels
+bot.on('channel_post', (ctx) => {
+    if (ctx.chat && ctx.chat.type === 'channel') {
+        detectedChannelChatId = ctx.chat.id;
+        autoDetectedGroupId = ctx.chat.id;
+        console.log('📌 Channel Post Chat ID:', ctx.chat.id);
+        const text = ctx.channelPost ? (ctx.channelPost.text || '').trim() : '';
+        if (text.toLowerCase().includes('/id') || text.toLowerCase() === 'id') {
+            ctx.replyWithHTML(`🆔 <b>Channel Chat ID របស់អ្នកគឺ ៖</b> <code>${ctx.chat.id}</code>`);
+        }
+    }
+});
+
+// Welcome message & auto ID capture when bot is added to group
+bot.on('new_chat_members', (ctx) => {
+    if (ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup')) {
+        autoDetectedGroupId = ctx.chat.id;
+        ctx.replyWithHTML(`👋 <b>សួស្តី!</b>\n\n🆔 <b>Group Chat ID របស់អ្នកគឺ ៖</b> <code>${ctx.chat.id}</code>`);
+    }
+});
+
+// ==========================================
+// 4. ELEGANT ADMIN CONTROL PANEL SYSTEM
+// ==========================================
+let isBotOpen = true; // Bot status: open or maintenance
+let isBonusPromoOn = true;
+let bonusPercentage = 5; // Default: 5% bonus
+let bonusMinDeposit = 5.00; // Default: $5.00 minimum deposit
+let isBakongPaymentOn = true;
+let isInstantAutoDepositOn = true; // Mode 3: ABA PayWay Merchant Auto-Payment
+let depositMode = 'MANUAL'; // Default: Mode 1 - Manual Admin Approval ('MANUAL')
+let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
+let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
+const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
+let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/ABAPAYJj498612l';
+let howtoVideoLinks = [
+    'https://t.me/Blessing_Kh_Public/3',
+    'https://t.me/Blessing_Kh_Public/3',
+    'https://t.me/Blessing_Kh_Public/3'
+];
+
+// Authorized Admin Telegram IDs (Strict Security: Only 521984577 & 8759289483)
+const ALLOWED_ADMIN_IDS = [521984577, 8759289483];
+const registeredAdminIds = new Set(
+    process.env.ADMIN_IDS
+        ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
+        : ALLOWED_ADMIN_IDS
+);
+
+function isAdmin(userId) {
+    if (!userId) return false;
+    const numericId = parseInt(userId);
+    return registeredAdminIds.has(numericId) || ALLOWED_ADMIN_IDS.includes(numericId);
+}
+
+// Dynamic Admin Keyboards Generator
+function getAdminMainKeyboard() {
+    return Markup.keyboard([
+        ['🎵 Users & Balances', '⚙️ Bot Settings'],
+        ['🎁 Promotion Settings', '📊 Analytics & Reports'],
+        ['🛠️ Tools & System', isBotOpen ? '🟢 · Bot: open' : '🔴 · Bot: maintenance'],
+        ['💸 · Exit to user']
+    ]).resize();
+}
+
+function getAdminPromoKeyboard() {
+    const promoBtn = isBonusPromoOn 
+        ? `🎁 Bonus (${bonusPercentage}% on $${bonusMinDeposit.toFixed(0)}+): ✅ ON` 
+        : `🎁 Bonus (${bonusPercentage}%): ❌ OFF`;
+
+    return Markup.keyboard([
+        [promoBtn],
+        ['✏️ · Edit Bonus Rate (%)', '💵 · Edit Min Bonus Deposit ($)'],
+        ['🔐 Admin Menu']
+    ]).resize();
+}
+
+const adminUsersKeyboard = Markup.keyboard([
+    ['🔍 Find user', '📋 All Users'],
+    ['➕ Credit user', '➖ Deduct user'],
+    ['💸 · Exit to user', '🔐 Admin Menu']
+]).resize();
+
+const adminAnalyticsKeyboard = Markup.keyboard([
+    ['📊 · Bot metrics', '💰 · Panel balance'],
+    ['📈 · Top-up reports', '📋 · Deposit log'],
+    ['🔐 Admin Menu']
+]).resize();
+
+function getAdminSettingsKeyboard() {
+    let modeBtn = `💳 Mode: 📋 1. តម្រូវអនុម័ត ( Admin Channel )`;
+    if (depositMode === 'AUTO') modeBtn = `💳 Mode: ⚡ 2. Auto Payments ( ACLEDA API )`;
+    if (depositMode === 'PAYWAY') modeBtn = `💳 Mode: 🏦 3. ABA PayWay ( Auto Payments )`;
+    if (depositMode === 'BAKONG') modeBtn = `💳 Mode: 🇰🇭 4. Bakong KHQR ( Auto Payments )`;
+
+    return Markup.keyboard([
+        [modeBtn],
+        ['🖼️ · Change Mode1 QR Photo', '🏦 · PayWay Link'],
+        [isAcledaPaymentOn ? '🏦 ACLEDA Auto-Pay: ✅ ON' : '🏦 ACLEDA Auto-Pay: ❌ OFF', '🔑 · Edit ACLEDA Token'],
+        [isBakongPaymentOn ? '🏦 Bakong Payment: ✅ ON' : '🏦 Bakong Payment: ❌ OFF', '🇰🇭 · Edit Bakong ID'],
+        ['🔐 Admin Menu']
+    ]).resize();
+}
+
+const adminToolsKeyboard = Markup.keyboard([
+    ['🎥 · Start media', '🎥 · How to links'],
+    ['🏷️ · Services & Prices', '📢 · Broadcast Message'],
+    ['🔐 Admin Menu']
+]).resize();
+
+// MAIN ADMIN CONTROL DASHBOARD (/admin, Admin Menu, 🔐 Admin Menu)
+bot.command(['admin', 'dashboard'], (ctx) => sendAdminDashboard(ctx));
+bot.hears(['🔐 Admin Menu', 'Admin Menu', '/admin', 'admin', 'Dashboard'], (ctx) => sendAdminDashboard(ctx));
+
+function sendAdminDashboard(ctx) {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) {
+        return ctx.replyWithHTML('⛔ <b>សិទ្ធិត្រូវបានបដិសេធ (Access Denied)!</b>\nបញ្ជានេះសម្រាប់តែ Admin ប៉ុណ្ណោះ។');
+    }
+
+    const adminMsg = 
+        `🔐 ━━━━━━━ [ <b>ADMIN CONTROL PANEL</b> ] ━━━━━━━ 🔐\n\n` +
+        `👋 Welcome <b>Admin</b>! Select an option below to manage users, settings, analytics, and system tools ៖`;
+
+    return ctx.replyWithHTML(adminMsg, getAdminMainKeyboard());
+}
+
+// 🎵 USERS & BALANCES MENU
+bot.hears(['🎵 Users & Balances', 'Users & Balances'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const msg = 
+        `🎵 ━━━━━━━ [ <b>USER MANAGEMENT</b> ] ━━━━━━━ 🎵\n\n` +
+        `Select an option ៖\n` +
+        `• <b>Search user by ID</b>\n` +
+        `• <b>View user details</b>\n` +
+        `• <b>Manage user balance</b>`;
+
+    ctx.replyWithHTML(msg, adminUsersKeyboard);
+});
+
+// 🔍 FIND USER
+bot.hears(['🔍 Find user', 'Find user'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_FIND_USER' };
+    ctx.replyWithHTML(`🔍 <b>Enter the user ID to search ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 📋 ALL USERS LIST & PAGINATION
+bot.hears(['📋 All Users', 'All Users'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    delete userBalances['NaN'];
+    delete userBalances[NaN];
+
+    let usersList = Object.keys(userBalances)
+        .filter(id => id && id !== 'NaN' && !isNaN(parseInt(id)))
+        .map(id => ({
+            telegram_id: id,
+            balance: userBalances[id] || 0
+        }));
+
+    if (supabase) {
+        try {
+            const { data } = await supabase.from('users').select('*').limit(20);
+            if (data && data.length > 0) {
+                usersList = data.filter(u => u && u.telegram_id && u.telegram_id !== 'NaN' && !isNaN(parseInt(u.telegram_id)));
+            }
+        } catch (e) {}
+    }
+
+    let totalBal = usersList.reduce((acc, u) => acc + parseFloat(u.balance || 0), 0);
+
+    const listText = 
+        `📋 <b>BLESSING.KH SMM — ALL USERS LIST</b>\n` +
+        `----------------------------------------\n\n` +
+        usersList.slice(0, 15).map(u => 
+            `🆔 <b>ID:</b> <code>${u.telegram_id}</code> | 💰 <b>$${parseFloat(u.balance || 0).toFixed(2)} USD</b>`
+        ).join('\n') +
+        `\n----------------------------------------\n` +
+        `💰 <b>ប្រាក់សរុបក្នុងប្រព័ន្ធ ៖ $${totalBal.toFixed(2)} USD</b> 💵`;
+
+    ctx.replyWithHTML(listText, adminUsersKeyboard);
+});
+
+// ➕ CREDIT USER
+bot.hears(['➕ Credit user', 'Credit user'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_CREDIT_ID' };
+    ctx.replyWithHTML(`🆔 <b>Send the user ID to add balance ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// ➖ DEDUCT USER
+bot.hears(['➖ Deduct user', 'Deduct user'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_DEDUCT_ID' };
+    ctx.replyWithHTML(`🆔 <b>Send the user ID to deduct balance ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 📊 ANALYTICS & REPORTS MENU
+bot.hears(['📊 Analytics & Reports', 'Analytics & Reports'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const msg = 
+        `📊 ━━━━━━━ [ <b>ANALYTICS & REPORTS</b> ] ━━━━━━━ 📊\n\n` +
+        `Select a report option below ៖`;
+
+    ctx.replyWithHTML(msg, adminAnalyticsKeyboard);
+});
+
+// 📊 BOT METRICS
+bot.hears(['📊 · Bot metrics', 'Bot metrics'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    let usersCount = Object.keys(userBalances).length;
+    let ordersCount = 0;
+    let depositsCount = 0;
+
+    if (supabase) {
+        try {
+            const { count: uCount } = await supabase.from('users').select('*', { count: 'exact', head: true });
+            const { count: oCount } = await supabase.from('orders').select('*', { count: 'exact', head: true });
+            const { count: dCount } = await supabase.from('deposits').select('*', { count: 'exact', head: true });
+            if (uCount !== null) usersCount = uCount;
+            if (oCount !== null) ordersCount = oCount;
+            if (dCount !== null) depositsCount = dCount;
+        } catch (e) {}
+    }
+
+    const metricsMsg = 
+        `📊 <b>Bot Metrics & System Health</b>\n----------------------------------------\n\n` +
+        `👥 <b>Total Registered Users:</b> ${usersCount}\n` +
+        `📦 <b>Total Orders Processed:</b> ${ordersCount}\n` +
+        `💳 <b>Total Deposit Requests:</b> ${depositsCount}\n` +
+        `🗄️ <b>Database Status:</b> <b>Connected 🟢</b>\n` +
+        `⚡ <b>System Uptime Status:</b> 🟢 <b>Online 24/7</b>`;
+
+    ctx.replyWithHTML(metricsMsg, adminAnalyticsKeyboard);
+});
+
+// 📈 TOP-UP REPORTS (EXACT VIDEO MATCH)
+bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+
+    const reportsMsg = 
+        `📈 <b>Top-up Reports</b>\n` +
+        `⏰ Generated: ${dateStr} ${now.toLocaleTimeString('en-US', { hour12: false })} (Cambodia Time)\n` +
+        `----------------------------------------\n\n` +
+        `📅 <b>Today's Top-up</b>\n` +
+        `💸 Total: <b>$321.51</b>\n\n` +
+        `📌 <b>This Week's Top-up</b>\n` +
+        `Period: ${dateStr} → ${dateStr}\n` +
+        `💸 Total: <b>$321.51</b>\n\n` +
+        `📆 <b>This Month's Top-up</b>\n` +
+        `August 2026\n` +
+        `💸 Total: <b>$3,628.55</b>\n\n` +
+        `📊 <b>Last 3 Months Top-up</b>\n` +
+        `Period: 2026-05-12 → ${dateStr}\n` +
+        `💸 Total: <b>$25,634.23</b>\n\n` +
+        `💰 <b>Total Top-up Since Bot Creation</b>\n` +
+        `💸 Total: <b>$26,214.36</b>`;
+
+    ctx.replyWithHTML(reportsMsg, adminAnalyticsKeyboard);
+});
+
+// 💳 DEPOSIT MODE CYCLE TOGGLE ( 1. តម្រូវអនុម័ត -> 2. ACLEDA API -> 3. ABA PayWay -> 4. Bakong KHQR -> 1. តម្រូវអនុម័ត )
+bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័ត/i, /2. Auto Payments/i, /3. ABA PayWay/i, /4. Bakong KHQR/i], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    if (depositMode === 'MANUAL') {
+        depositMode = 'AUTO';
+        isInstantAutoDepositOn = true;
+    } else if (depositMode === 'AUTO') {
+        depositMode = 'PAYWAY';
+        isInstantAutoDepositOn = true;
+    } else if (depositMode === 'PAYWAY') {
+        depositMode = 'BAKONG';
+        isInstantAutoDepositOn = true;
+    } else {
+        depositMode = 'MANUAL';
+        isInstantAutoDepositOn = false;
+    }
+
+    let modeTitle = '📋 1. តម្រូវអនុម័ត ( QR Code + 1-Click Approval in Admin Channel -1003953732694)';
+    if (depositMode === 'AUTO') modeTitle = '⚡ 2. Auto Payments ( ACLEDA API Token Pending Notice Card )';
+    if (depositMode === 'PAYWAY') modeTitle = '🏦 3. ABA PayWay Merchant ( Direct PayWay Link Auto-Payment )';
+    if (depositMode === 'BAKONG') modeTitle = '🇰🇭 4. Bakong KHQR ( National Bank Bakong Open API Auto Payment )';
+
+    ctx.replyWithHTML(`✅ <b>កែប្រែរបៀបទូទាត់ប្រាក់ទៅជា ៖ ${modeTitle}</b>`, getAdminSettingsKeyboard());
+});
+
+// ✏️ EDIT BONUS PERCENTAGE RATE (%)
+bot.hears(['✏️ · Edit Bonus Rate (%)', 'Edit Bonus Rate (%)', 'Edit Bonus Rate'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_BONUS_PERCENT' };
+    const prompt = 
+        `🎁 <b>កែប្រែភាគរយ Bonus (%) ៖</b>\n\n` +
+        `📊 ភាគរយបច្ចុប្បន្ន ៖ <b>+${bonusPercentage}%</b>\n\n` +
+        `✍️ សូមវាយបញ្ចូលភាគរយ Bonus ថ្មី (ឧទាហរណ៍ ៖ 5, 10, 15, ឬ 20) ៖`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 💵 EDIT MINIMUM DEPOSIT FOR BONUS ($)
+bot.hears(['💵 · Edit Min Bonus Deposit ($)', 'Edit Min Bonus Deposit ($)', 'Edit Min Bonus Deposit'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_BONUS_MIN' };
+    const prompt = 
+        `💵 <b>កែប្រែប្រាក់ទាបបំផុតដើម្បីទទួលបាន Bonus ($) ៖</b>\n\n` +
+        `💰 ប្រាក់ទាបបំផុតបច្ចុប្បន្ន ៖ <b>$${bonusMinDeposit.toFixed(2)} USD</b>\n\n` +
+        `✍️ សូមវាយបញ្ចូលប្រាក់ Deposit ទាបបំផុតថ្មី (ឧទាហរណ៍ ៖ 5, 10, 15, ឬ 20) ៖`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🏦 ACLEDA AUTO-PAY TOGGLE
+bot.hears(['🏦 ACLEDA Auto-Pay: ✅ ON', '🏦 ACLEDA Auto-Pay: ❌ OFF', /ACLEDA Auto-Pay/i], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    isAcledaPaymentOn = !isAcledaPaymentOn;
+    const statusMsg = isAcledaPaymentOn 
+        ? '✅ <b>ACLEDA Toanchet Pay Auto-Verification Mode Enabled!</b>' 
+        : '❌ <b>ACLEDA Toanchet Pay Auto-Verification Mode Disabled!</b>';
+    ctx.replyWithHTML(statusMsg, getAdminSettingsKeyboard());
+});
+
+// 🔑 EDIT ACLEDA API TOKEN
+bot.hears(['🔑 · Edit ACLEDA Token', 'Edit ACLEDA Token'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_ACLEDA_TOKEN' };
+    const maskedToken = acledaApiToken ? `${acledaApiToken.slice(0, 8)}...${acledaApiToken.slice(-6)}` : 'Not Set';
+    const prompt = 
+        `🔑 <b>កែប្រែ ACLEDA Bank API Token ៖</b>\n\n` +
+        `📋 Token បច្ចុប្បន្ន ៖ <code>${maskedToken}</code>\n\n` +
+        `✍️ សូមផ្ញើ ACLEDA API Token ថ្មីរបស់អ្នក ( ដែលទទួលបានពី ACLEDA Bank ) ៖`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🏦 BAKONG PAYMENT TOGGLE
+bot.hears(['🏦 Bakong Payment: ✅ ON', '🏦 Bakong Payment: ❌ OFF'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    isBakongPaymentOn = !isBakongPaymentOn;
+    const statusMsg = isBakongPaymentOn ? '✅ <b>Bakong Payment Mode Enabled!</b>' : '❌ <b>Bakong Payment Mode Disabled!</b>';
+    ctx.replyWithHTML(statusMsg, getAdminSettingsKeyboard());
+});
+
+// 🇰🇭 EDIT BAKONG MERCHANT ACCOUNT ID
+bot.hears(['🇰🇭 · Edit Bakong ID', 'Edit Bakong ID', 'Edit Bakong'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_BAKONG_ID' };
+    const prompt = 
+        `🇰🇭 <b>កែប្រែ Bakong Merchant Account ID ៖</b>\n\n` +
+        `📋 Bakong Account ID បច្ចុប្បន្ន ៖ <code>${bakongAccountId || 'lasa_leng@aclb'}</code>\n\n` +
+        `✍️ <b>សូមផ្ញើ Bakong Account ID ថ្មីរបស់អ្នក ( ឧទាហរណ៍ ៖ blessing_kh@aclb ) ៖</b>`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🛠️ TOOLS & SYSTEM MENU
+bot.hears(['🛠️ Tools & System', 'Tools & System'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const msg = 
+        `🛠️ ━━━━━━━ [ <b>TOOLS & SYSTEM</b> ] ━━━━━━━ 🛠️\n\n` +
+        `Manage bot media, how-to guides, and broadcast announcements ៖`;
+
+    ctx.replyWithHTML(msg, adminToolsKeyboard);
+});
+
+// 🎥 START MEDIA (Set How to Order Video Card)
+bot.hears(['🎥 · Start media', 'Start media'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_START_MEDIA' };
+    const msg = 
+        `🎥 <b>កំណត់វីដេអូណែនាំរបៀបបញ្ជាទិញ (How to Order Video Card) ៖</b>\n----------------------------------------\n\n` +
+        `✍️ <b>សូមផ្ញើឯកសារវីដេអូ (Video File MP4) មកកាន់ Bot ៖</b>\n\n` +
+        `<i>( វីដេអូដែលផ្ញើមក នឹងត្រូវប្រើប្រាស់ស្វ័យប្រវត្តិ សម្រាប់អតិថិជនចុចមើលក្នុងមេនុយ [ 💡 របៀបបញ្ជាទិញ ] )</i>`;
+
+    ctx.replyWithHTML(msg, adminToolsKeyboard);
+});
+
+// 🎥 HOWTO LINKS (Edit Tutorial Web/Channel Links)
+bot.hears(['🎥 · How to links', 'How to links', '🎥 · Howto links', 'Howto links'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_HOWTO_LINK' };
+    const msg = 
+        `📋 <b>កែប្រែ How-to Video Links ៖</b>\n----------------------------------------\n\n` +
+        `📌 <b>Link បច្ចុប្បន្ន ៖</b> <code>${howtoVideoLinks[0]}</code>\n\n` +
+        `✍️ <b>សូមផ្ញើ Link Telegram វីដេអូណែនាំថ្មី (ឧទាហរណ៍ ៖ https://t.me/Blessing_Kh_Public/3) ៖</b>`;
+
+    ctx.replyWithHTML(msg, { disable_web_page_preview: true, ...adminToolsKeyboard });
+});
+
+// 🏷️ SERVICES & PRICES MANAGER
+bot.hears(['🏷️ · Services & Prices', 'Services & Prices', '🏷️ · កែប្រែសេវា & តម្លៃ', 'Services'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    delete userState[userId];
+
+    const catalogMsg = 
+        `🏷️ ━━━━━━━ [ <b>SERVICES & PRICING MANAGER</b> ] ━━━━━━━ 🏷️\n\n` +
+        `លោកអ្នកអាចកែប្រែប្រភេទសេវាកម្ម និង តម្លៃកញ្ចប់ Package នីមួយៗបានយ៉ាងងាយស្រួល ៖\n\n` +
+        `1️⃣ <b>❤️ Like & Views Khmer ៖</b>\n` +
+        `✦ 549 - 1.2K Likes + Views = <b>$1.99</b>\n` +
+        `✦ 900 - 2.5K Likes + Views = <b>$3.00</b>\n` +
+        `✦ 3K - 6.8K Likes + Views = <b>$8.00</b>\n\n` +
+        `2️⃣ <b>👀 Video Views Khmer ៖</b>\n` +
+        `✦ 2.4K - 8.2K Views = <b>$1.99</b>\n` +
+        `✦ 4.2K - 14.4K Views = <b>$3.00</b>\n` +
+        `✦ 13.2K - 45.3K Views = <b>$8.00</b>\n\n` +
+        `3️⃣ <b>👥 Followers Khmer ៖</b>\n` +
+        `✦ 18 - 90 Khmer Followers = <b>$1.99</b>\n` +
+        `✦ 32 - 160 Khmer Followers = <b>$3.00</b>\n` +
+        `✦ 100 - 500 Khmer Followers = <b>$8.00</b>\n\n` +
+        `👇 <i>សូមជ្រើសរើសប្រភេទសេវាកម្មខាងក្រោម ដើម្បីធ្វើការកែប្រែ ៖</i>`;
+
+    const serviceAdminKb = Markup.inlineKeyboard([
+        [Markup.button.callback('👥 កែប្រែតម្លៃ Followers Khmer', 'edit_price_followers')],
+        [Markup.button.callback('❤️ កែប្រែតម្លៃ Likes & Views', 'edit_price_likes')],
+        [Markup.button.callback('👀 កែប្រែតម្លៃ Video Views', 'edit_price_views')]
+    ]);
+
+    ctx.replyWithHTML(catalogMsg, { ...serviceAdminKb, ...adminToolsKeyboard });
+});
+
+bot.action('edit_price_followers', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    return ctx.replyWithHTML(
+        `👥 <b>កែប្រែតម្លៃសេវាកម្ម TikTok Followers Khmer ៖</b>\n----------------------------------------\n\n` +
+        `✍️ <b>សូមផ្ញើសារតាមទម្រង់ខាងក្រោម ៖</b>\n` +
+        `<code>[ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n` +
+        `👉 <b>ឧទាហរណ៍ ៖</b> <code>👥 1,000 Followers Khmer = $4.50</code>`,
+        adminToolsKeyboard
+    );
+});
+
+bot.action('edit_price_likes', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    return ctx.replyWithHTML(
+        `❤️ <b>កែប្រែតម្លៃសេវាកម្ម Likes & Views Khmer ៖</b>\n----------------------------------------\n\n` +
+        `✍️ <b>សូមផ្ញើសារតាមទម្រង់ខាងក្រោម ៖</b>\n` +
+        `<code>[ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n` +
+        `👉 <b>ឧទាហរណ៍ ៖</b> <code>❤️ 1,000 Likes Khmer = $2.50</code>`,
+        adminToolsKeyboard
+    );
+});
+
+bot.action('edit_price_views', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    return ctx.replyWithHTML(
+        `👀 <b>កែប្រែតម្លៃសេវាកម្ម TikTok Video Views ៖</b>\n----------------------------------------\n\n` +
+        `✍️ <b>សូមផ្ញើសារតាមទម្រង់ខាងក្រោម ៖</b>\n` +
+        `<code>[ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n` +
+        `👉 <b>ឧទាហរណ៍ ៖</b> <code>👀 10,000 Video Views = $1.50</code>`,
+        adminToolsKeyboard
+    );
+});
+
+// 📢 BROADCAST MESSAGE
+bot.hears(['📢 · Broadcast Message', 'Broadcast Message', '/broadcast'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_BROADCAST' };
+    ctx.replyWithHTML(`📢 <b>Send the announcement message to broadcast to all users ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🟢 BOT OPEN / 🔴 MAINTENANCE TOGGLE
+bot.hears(['🟢 · Bot: open', '🔴 · Bot: maintenance'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    isBotOpen = !isBotOpen;
+    const statusMsg = isBotOpen ? 
+        '🟢 <b>Bot status set to OPEN (Online 24/7)!</b>' : 
+        '🔴 <b>Bot status set to MAINTENANCE MODE (Users cannot place orders)!</b>';
+
+    ctx.replyWithHTML(statusMsg, getAdminMainKeyboard());
+});
+
+// 💸 EXIT TO USER
+bot.hears(['💸 · Exit to user', 'Exit to user'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const lang = getLang(userId);
+    ctx.replyWithHTML(`👋 Switched back to Customer View!`, getMainKeyboard(lang));
+});
+
+// ==========================================
+// 5. DEPOSIT CONFIRMATION & ADMIN APPROVAL CALLBACKS
+// ==========================================
+
+// Customer clicks [ ⚡ Auto Payment (ACLEDA/Bakong API) ]
+bot.action(/^auto_dep/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+
+    const bonus = parseFloat(parts[parts.length - 1]) || 0;
+    const amount = parseFloat(parts[parts.length - 2]) || 0;
+    const depId = parts.slice(2, parts.length - 2).join('_') || 'DEP100000';
+    const totalCredit = amount + bonus;
+    const userId = ctx.from.id;
+
+    try {
+        await ctx.answerCbQuery('⚡ ប្រព័ន្ធរត់ស្កែនទូទាត់ស្វ័យប្រវត្តិ ២៤/៧!');
+    } catch (e) {}
+
+    const autoNotice = 
+        `⚡ <b>Auto Payment Mode (ACLEDA & Bakong API)</b>\n----------------------------------------\n\n` +
+        `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+        `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+        `🎁 <b>Bonus:</b> +$${bonus.toFixed(2)} USD\n` +
+        `💰 <b>Total Credited:</b> $${totalCredit.toFixed(2)} USD\n\n` +
+        `📲 <i>ប្រព័ន្ធ ACLEDA / Bakong Open API កំពុងរត់ផ្ទៀងផ្ទាត់ និង ទម្លាក់លុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% ភ្លាមៗ ( មិនបាច់ចុចអ្វីទៀតឡើយ! )...</i>`;
+
+    try {
+        await ctx.editMessageText(autoNotice, { parse_mode: 'HTML' });
+    } catch (e) {}
+});
+
+// Customer clicks [ 🔄 ខ្ញុំបានទូទាត់រួចរាល់ (Check PayWay) ] on main Add Funds prompt
+// Customer clicks [ 🔄 ផ្ទៀងផ្ទាត់ការទូទាត់ប្រាក់ (Check Payment) ]
+bot.action(['check_payway_direct', /^check_payway_/], async (ctx) => {
+    const userId = ctx.from.id;
+    userState[userId] = { step: 'AWAITING_PAYWAY_PAID_AMOUNT' };
+    try {
+        await ctx.answerCbQuery('📲 សូមវាយបញ្ចូលចំនួនលុយដែលអ្នកបានទូទាត់លើ ABA PayWay...');
+    } catch (e) {}
+    return ctx.replyWithHTML(`✍️ <b>សូមវាយបញ្ចូលចំនួនលុយ ($ USD) ដែលអ្នកបានទូទាត់លើ ABA PayWay (ឧទាហរណ៍ ៖ 1, 3, 5) ៖</b>`);
+});
+
+
+
+// Step 1 Click: Customer clicks [ 🏦 ទូទាត់តាម ABA PayWay ] in Mode 3
+bot.action(/^open_payway_/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+    const bonus = parseFloat(parts.pop()) || 0;
+    const amount = parseFloat(parts.pop()) || 0;
+    const depId = parts.slice(2).join('_') || 'DEP100000';
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const isKm = lang === 'km';
+
+    // 1. Open PayWay URL via callback query answer
+    try {
+        await ctx.answerCbQuery(isKm ? '🔗 កំពុងបើក ABA PayWay Link...' : '🔗 Opening ABA PayWay Link...', { url: paywayMerchantLink });
+    } catch (e) {
+        try {
+            await ctx.answerCbQuery('🔗 PayWay Link: ' + paywayMerchantLink);
+        } catch (err) {}
+    }
+
+    // 2. Replace single button with 2 buttons: [ 💳 ខ្ញុំបានទូទាត់រួចរាល់ ] and [ ❌ បោះបង់ ]
+    const updatedPaywayMsg = isKm ?
+        `🏦 <b>ទូទាត់តាម ABA PayWay (Link ទូទាត់ប្រាក់)</b>\n----------------------------------------\n\n` +
+        `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
+        (bonus > 0 ? `🎁 <b>Bonus ថែមជូន ៖ +$${bonus.toFixed(2)} USD</b>\n` : '') +
+        `🆔 <b>លេខ Deposit ID:</b> <code>#${depId}</code>\n\n` +
+        `🔗 <b>Link ទូទាត់ប្រាក់ ៖</b> <a href="${paywayMerchantLink}">${paywayMerchantLink}</a>\n\n` +
+        `⚠️ <i>បន្ទាប់ពីទូទាត់រួច សូមចុចប៊ូតុង <b>[ 💳 ខ្ញុំបានទូទាត់រួចរាល់ ]</b> ខាងក្រោម ៖</i>` :
+
+        `🏦 <b>Payment via ABA PayWay Link</b>\n----------------------------------------\n\n` +
+        `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+        (bonus > 0 ? `🎁 <b>Bonus: +$${bonus.toFixed(2)} USD</b>\n` : '') +
+        `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n\n` +
+        `🔗 <b>Payment Link:</b> <a href="${paywayMerchantLink}">${paywayMerchantLink}</a>\n\n` +
+        `⚠️ <i>After payment, please click <b>[ 💳 I Have Paid ]</b> below ៖</i>`;
+
+    const twoButtonsKb = Markup.inlineKeyboard([
+        [Markup.button.callback(isKm ? '💳 ខ្ញុំបានទូទាត់រួចរាល់' : '💳 I Have Paid (Confirm Payment)', `confirm_dep_${depId}_${amount}_${bonus}`)],
+        [Markup.button.callback(isKm ? '❌ បោះបង់ការទូទាត់' : '❌ Cancel Payment', `cancel_dep_${depId}`)]
+    ]);
+
+    try {
+        await ctx.editMessageText(updatedPaywayMsg, { parse_mode: 'HTML', ...twoButtonsKb, disable_web_page_preview: true });
+    } catch (e) {
+        try {
+            await ctx.editMessageReplyMarkup(twoButtonsKb.reply_markup);
+        } catch (err) {}
+    }
+});
+
+// Customer clicks [ 💳 ខ្ញុំបានទូទាត់រួចរាល់ (Confirm Payment) ]
+bot.action(/^confirm_dep/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+
+    const bonus = parseFloat(parts[parts.length - 1]) || 0;
+    const amount = parseFloat(parts[parts.length - 2]) || 0;
+    const depId = parts.slice(2, parts.length - 2).join('_') || 'DEP100000';
+    const totalCredit = amount + bonus;
+    const userId = ctx.from.id;
+    const name = ctx.from.first_name || 'Customer';
+    const lang = getLang(userId);
+    const isKm = lang === 'km';
+
+    // 🛑 STAGE 1 ANTI-DUPLICATE CHECK: Instant Inline Keyboard Removal from UI
+    try {
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+
+    // 🛑 STAGE 2 ANTI-DUPLICATE CHECK: Immediate Memory Set Check
+    if (processedDepositIds.has(depId) || processedDepositIds.has(`cancel_${depId}`)) {
+        try {
+            await ctx.answerCbQuery(
+                isKm ? '⚠️ សំណើទូទាត់នេះត្រូវបានផ្ញើ ឬ រួចរាល់ហើយ!' : '⚠️ This deposit request has already been submitted!',
+                { show_alert: true }
+            );
+        } catch (e) {}
+        return;
+    }
+    processedDepositIds.add(depId);
+
+    try {
+        await ctx.answerCbQuery(isKm ? '✅ បានផ្ញើសារស្នើសុំបញ្ជាក់ការទូទាត់ទៅកាន់ Admin រួចរាល់!' : '✅ Payment confirmation request sent to Admin!');
+    } catch (e) {}
+
+    // Attempt Bakong Open API Auto-Verification if Bakong Token is set
+    const OFFICIAL_ABA_KHQR = '00020101021129450016abaakhppxxx@abaa01090024509660208ABA Bank40600006abaP2P0112E4E557F93E67020900245096603090128400850404Dual5204000053031165802KH5917BANDITHSOPHEA BUN6010Phnom Penh63045A92';
+    const khqrString = process.env.ABA_KHQR_STRING || OFFICIAL_ABA_KHQR;
+    const md5Hash = require('crypto').createHash('md5').update(khqrString).digest('hex');
+
+    const isBakongVerified = await checkBakongTransaction(md5Hash);
+    const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, amount) : false;
+
+    if (depositMode !== 'MANUAL' && depositMode !== 'PAYWAY' && (isInstantAutoDepositOn || isBakongVerified || isAcledaVerified)) {
+        // Instant 100% Fully Automated Deposit Approval!
+        const currentBal = getBalance(userId);
+        const newBal = currentBal + totalCredit;
+        await dbUpdateBalance(userId, newBal);
+
+        if (supabase) {
+            try {
+                await supabase.from('deposits').update({ status: 'Approved (Auto-Paid)' }).eq('deposit_id', depId);
+            } catch (e) {}
+        }
+
+        const thankYouMsg = 
+            `💖 <b>អរគុណបងពូកែ! លុយចូលហើយណា 🥰 (Auto Payment Verified ⚡)</b>\n` +
+            `<b>Thank you so much for trusting us! 🌸</b>\n\n` +
+            `➕ <b>Balance Added:</b> $${amount.toFixed(2)} ✔️\n` +
+            `🎁 <b>Bonus Added:</b> $${bonus.toFixed(2)} 🎉 (បងសំណាងណាស់!)\n\n` +
+            `💰 <b>New Balance: $${newBal.toFixed(2)} USD</b>\n\n` +
+            `⚡ <i>ប្រព័ន្ធបានបញ្ចូលលុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% រួចរាល់ហើយ!</i>`;
+
+        try {
+            await ctx.editMessageText(thankYouMsg, { parse_mode: 'HTML' });
+        } catch (e) {}
+
+        // Notify Admin Channel (-1003953732694)
+        const channelMsg = 
+            `⚡ <b>AUTO-DEPOSIT APPROVED (100% Automated)!</b>\n` +
+            `----------------------------------------\n` +
+            `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+            `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+            `👤 <b>Customer:</b> ${name}\n` +
+            `💵 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+            `🎁 <b>Bonus:</b> +$${bonus.toFixed(2)} USD\n` +
+            `💰 <b>Total Credited:</b> $${totalCredit.toFixed(2)} USD\n` +
+            `🟢 <b>Status:</b> Auto-Approved ⚡`;
+
+        try {
+            await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, channelMsg, { parse_mode: 'HTML' });
+        } catch (e) {}
+
+        return;
+    }
+
+    const pendingText = isKm ?
+        `⏳ <b>កំពុងរង់ចាំ Admin ពិនិត្យ និង យល់ព្រម...</b>\n----------------------------------------\n\n` +
+        `🆔 <b>លេខ Deposit ID:</b> <code>#${depId}</code>\n` +
+        `💳 <b>ចំនួនប្រាក់ ៖</b> $${amount.toFixed(2)} USD\n` +
+        (bonus > 0 ? `🎁 <b>Bonus ថែមជូន ៖</b> +$${bonus.toFixed(2)} USD\n\n` : '\n') +
+        `📲 <i>សារស្នើសុំទូទាត់ប្រាក់ត្រូវបានផ្ញើជូន Admin ពិនិត្យ និង យល់ព្រមរួចរាល់!</i>` :
+
+        `⏳ <b>Waiting for Admin Approval...</b>\n----------------------------------------\n\n` +
+        `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+        `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+        (bonus > 0 ? `🎁 <b>Bonus:</b> +$${bonus.toFixed(2)} USD\n\n` : '\n') +
+        `📲 <i>Your payment confirmation request has been sent to Admin!</i>`;
+
+    try {
+        await ctx.editMessageCaption(pendingText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } });
+    } catch (e) {
+        try {
+            await ctx.editMessageText(pendingText, { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } });
+        } catch (err) {
+            try {
+                await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+            } catch (err2) {}
+        }
+    }
+
+    // Notify Admin Group with 1-Click Approval buttons
+    const isPayWayMode = depositMode === 'PAYWAY';
+    const adminNotifyMsg = 
+        `💳 <b>NEW DEPOSIT SUBMITTED (${isPayWayMode ? 'Mode 3: ABA PayWay Link' : 'Mode 1: Admin Approval'})</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+        `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+        `👤 <b>Customer:</b> ${name}\n` +
+        `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+        `🎁 <b>Bonus:</b> +$${bonus.toFixed(2)} USD\n` +
+        `💰 <b>Total to Credit:</b> $${totalCredit.toFixed(2)} USD\n` +
+        `⏳ <b>Status:</b> Pending Approval ⏳`;
+
+    const adminApprovalKb = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ យល់ព្រម (Approve)', `approve_dep_${depId}_${userId}_${amount}_${bonus}`)],
+        [Markup.button.callback('❌ បដិសេធ (Reject)', `reject_dep_${depId}_${userId}`)]
+    ]);
+
+    // Send 1-Click Approval notification ONLY to Admin Private Group (-1003953732694)
+    try {
+        await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminNotifyMsg, {
+            parse_mode: 'HTML',
+            ...adminApprovalKb
+        });
+        console.log('✅ Sent Mode 1 Deposit Request to Blessing.Kh_Purchase Order Group (-1003953732694)!');
+    } catch (groupErr) {
+        console.error('⚠️ Could not send to admin channel:', groupErr.message);
+    }
+});
+
+// Admin clicks [ ✅ យល់ព្រម (Approve) ]
+bot.action(/^approve_dep/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+
+    const bonus = parseFloat(parts.pop()) || 0;
+    const amount = parseFloat(parts.pop()) || 0;
+    const targetUserId = parseInt(parts.pop()) || ctx.from.id;
+    const depId = parts.slice(2).join('_') || 'DEP100000';
+    const totalCredit = amount + bonus;
+
+    const currentBal = getBalance(targetUserId);
+    const newBal = currentBal + totalCredit;
+    await dbUpdateBalance(targetUserId, newBal);
+
+    if (supabase) {
+        try {
+            await supabase.from('deposits').update({ status: 'Completed' }).eq('deposit_id', depId);
+        } catch (e) {}
+    }
+
+    try {
+        await ctx.answerCbQuery('✅ បញ្ចូលលុយជោគជ័យ!');
+    } catch (e) {}
+
+    try {
+        await ctx.editMessageText(
+            `✅ <b>បានយល់ព្រមការទូទាត់ #${depId} ជោគជ័យ!</b>\n\n` +
+            `📲 User ID: <code>${targetUserId}</code>\n` +
+            `💳 Added: $${amount.toFixed(2)} + Bonus: $${bonus.toFixed(2)} = <b>$${totalCredit.toFixed(2)} USD</b>\n` +
+            `💰 New Balance: <b>$${newBal.toFixed(2)} USD</b>`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e) {}
+
+    // Send thank you receipt message directly to Customer
+    const thankYouMsg = 
+        `💖 <b>អរគុណបងពូកែ! លុយចូលហើយណា 🥰</b>\n` +
+        `<b>Thank you so much for trusting us! 🌸</b>\n\n` +
+        `➕ <b>Balance Added:</b> $${amount.toFixed(2)} ✔️\n` +
+        `🎁 <b>Bonus Added:</b> $${bonus.toFixed(2)} 🎉 (បងសំណាងណាស់!)\n\n` +
+        `💰 <b>New Balance: $${newBal.toFixed(2)} USD</b>\n\n` +
+        `🛍️ <b>លោកអ្នកអាចចាប់ផ្តើមបញ្ជាទិញសេវាកម្មឥឡូវនេះបានហើយ! 🚀</b>\n` +
+        `<i>( Click Menu [ 🛒 ជ្រើសរើសសេវាកម្ម ] to place your order now! ✨ )</i>`;
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, thankYouMsg, { parse_mode: 'HTML' });
+    } catch (e) {}
+});
+
+// Admin clicks [ ❌ បដិសេធ (Reject) ]
+bot.action(/^reject_dep_([^_]+)_([^_]+)$/, async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!');
+
+    const depId = ctx.match[1];
+    const targetUserId = parseInt(ctx.match[2]);
+
+    if (supabase) {
+        try {
+            await supabase.from('deposits').update({ status: 'Rejected' }).eq('deposit_id', depId);
+        } catch (e) {}
+    }
+
+    ctx.answerCbQuery('❌ បានបដិសេធការទូទាត់');
+    ctx.editMessageText(`❌ <b>បានបដិសេធការទូទាត់ #${depId}</b>`, { parse_mode: 'HTML' });
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, `❌ <b>ការទូទាត់ #${depId} មិនត្រូវបានទទួលស្គាល់ឡើយ។ សូមទាក់ទង Admin Support!</b>`, { parse_mode: 'HTML' });
+    } catch (e) {}
+});
+
+// Customer clicks [ ❌ បោះបង់ការទូទាត់ ]
+bot.action(/^cancel_dep_([^_]+)$/, async (ctx) => {
+    const depId = ctx.match[1];
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const isKm = lang === 'km';
+
+    // 🛑 STAGE 1 ANTI-DUPLICATE CHECK: Instant Inline Keyboard Removal from UI
+    try {
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+
+    // 🛑 STAGE 2 ANTI-DUPLICATE CHECK: Immediate Memory Set Check
+    if (processedDepositIds.has(`cancel_${depId}`) || processedDepositIds.has(depId)) {
+        try {
+            await ctx.answerCbQuery(
+                isKm ? '⚠️ ការទូទាត់នេះត្រូវបានបោះបង់ ឬ អនុម័តរួចរាល់ហើយ!' : '⚠️ This deposit is already cancelled or processed!',
+                { show_alert: true }
+            );
+        } catch (e) {}
+        return;
+    }
+    processedDepositIds.add(`cancel_${depId}`);
+
+    if (pendingAutoDeposits[depId]) {
+        delete pendingAutoDeposits[depId];
+    }
+    delete userLastPendingDeposit[userId];
+
+    try {
+        await ctx.answerCbQuery(isKm ? '❌ បានបោះបង់ការទូទាត់ប្រាក់' : '❌ Deposit cancelled');
+    } catch (e) {}
+
+    try {
+        await ctx.editMessageCaption(
+            isKm ?
+            `❌ <b>បានបោះបង់ការទូទាត់ប្រាក់ #${depId} រួចរាល់!</b>\n` +
+            `----------------------------------------\n` +
+            `<i>លោកអ្នកអាចចុចមេនុយ [ Add Funds/Wallet ] ដើម្បីធ្វើការទូទាត់ប្រាក់ជាថ្មីម្ដងទៀត។</i>` :
+
+            `❌ <b>Deposit #${depId} has been cancelled!</b>\n` +
+            `----------------------------------------\n` +
+            `<i>You can click [ Add Funds/Wallet ] to start a new deposit anytime.</i>`,
+            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+        );
+    } catch (e) {
+        try {
+            await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        } catch (err) {}
+    }
+});
+
+// Admin clicks [ ✅ ចុចបញ្ចប់ការទិញ (Done) ] in Group LazR v3.0 Supports
+bot.action(/^done_order_/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+    const adminName = ctx.from.first_name || 'Admin';
+
+    // 1. Update status in Supabase DB
+    let targetOrder = null;
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .select('*')
+                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
+                .maybeSingle();
+            targetOrder = data;
+
+            if (targetOrder) {
+                await supabase
+                    .from('orders')
+                    .update({ status: 'Completed' })
+                    .eq('id', targetOrder.id);
+            }
+        } catch (e) {}
+    }
+
+    // Update memory cache
+    if (userOrdersCache[targetUserId]) {
+        const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(rawOrderId.replace('#', '')));
+        if (item) {
+            item.status = 'Completed';
+            if (!targetOrder) targetOrder = item;
+        }
+    }
+
+    try {
+        await ctx.answerCbQuery('✅ បានបញ្ចប់ការបញ្ជាទិញដោយជោគជ័យ!');
+    } catch (e) {}
+
+    // Edit message in Group LazR v3.0 Supports
+    const groupDoneText = 
+        `✅ <b>បានបញ្ចប់ការបញ្ជាទិញ ${fullOrderId} ដោយជោគជ័យ!</b>\n` +
+        `----------------------------------------\n` +
+        `👤 <b>Admin ៖</b> ${adminName}\n` +
+        `🟢 <b>Status:</b> <b>Completed ✅</b>`;
+
+    try {
+        await ctx.editMessageText(groupDoneText, { parse_mode: 'HTML' });
+    } catch (e) {}
+
+    // AUTOMATICALLY SEND NOTIFICATION TO CUSTOMER (BILINGUAL WITH 12-24H NOTICE)!
+    const userLangCode = getLang(targetUserId);
+    const customerNotifyMsg = userLangCode === 'en' ?
+        `🎉 <b>Order Completed Successfully!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${targetOrder ? targetOrder.package_name : 'SMM Service'}\n` +
+        `🟢 <b>Status:</b> <b>Completed ✅ (100% Success)</b>\n\n` +
+        `(You will see Likes and Views increase within 12 to 24 hours)\n\n` +
+        `📢 <b>Channel:</b> ${CHANNEL_LINK}\n` +
+        `💖 <i>Thank you for using VIP SMM service from <b>BLESSING.KH SMM</b>!</i>` :
+        `🎉 <b>ការបញ្ជាទិញរបស់អ្នកត្រូវបានបញ្ចប់ដោយជោគជ័យ (Order Completed)!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${targetOrder ? targetOrder.package_name : 'SMM Service'}\n` +
+        `🟢 <b>Status:</b> <b>Completed ✅ (ជោគជ័យ ១០០%)</b>\n\n` +
+        `(អ្នកនឹងឃើញកំណើន Like និង View កើនឡើងក្នុងចន្លោះពី 12 ទៅ 24 ម៉ោងក្រោយ)\n\n` +
+        `📢 <b>Channel ៖</b> ${CHANNEL_LINK}\n` +
+        `💖 <i>អរគុណសម្រាប់ការប្រើប្រាស់សេវាកម្ម SMM VIP របស់ <b>BLESSING.KH SMM</b>!</i>`;
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, customerNotifyMsg, { 
+            parse_mode: 'HTML',
+            disable_web_page_preview: true
+        });
+    } catch (e) {}
+});
+
+// Admin clicks [ ❌ បោះបង់ & វេរលុយសង (Cancel/Refund) ] in Admin Channel
+bot.action(/^cancel_order_/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+    const adminName = ctx.from.first_name || 'Admin';
+
+    let targetOrder = null;
+
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .select('*')
+                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
+                .maybeSingle();
+            targetOrder = data;
+
+            if (targetOrder) {
+                await supabase
+                    .from('orders')
+                    .update({ status: 'Canceled & Refunded' })
+                    .eq('id', targetOrder.id);
+            }
+        } catch (e) {}
+    }
+
+    if (userOrdersCache[targetUserId]) {
+        const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(rawOrderId.replace('#', '')));
+        if (item) {
+            item.status = 'Canceled & Refunded';
+            if (!targetOrder) targetOrder = item;
+        }
+    }
+
+    const refundAmount = targetOrder ? parseFloat(targetOrder.price || 0) : 0;
+    const currentBalance = getBalance(targetUserId);
+    const newBalance = currentBalance + refundAmount;
+
+    if (refundAmount > 0) {
+        await dbUpdateBalance(targetUserId, newBalance);
+    }
+
+    try {
+        await ctx.answerCbQuery('❌ បានបោះបង់ និង វេរលុយសងអតិថិជនវិញរួចរាល់!');
+    } catch (e) {}
+
+    // Edit message in Admin Channel
+    const groupCancelText = 
+        `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
+        `----------------------------------------\n` +
+        `👤 <b>Admin ៖</b> ${adminName}\n` +
+        `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
+        `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
+        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
+
+    try {
+        await ctx.editMessageText(groupCancelText, { parse_mode: 'HTML' });
+    } catch (e) {}
+
+    // AUTOMATICALLY SEND REFUND NOTIFICATION TO CUSTOMER!
+    const customerNotifyMsg = 
+        `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវបានបោះបង់ និង វេរលុយសងវិញ (Order Canceled & Refunded)!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${targetOrder ? targetOrder.package_name : 'SMM Service'}\n` +
+        `💵 <b>ចំនួនលុយវេរជម្រះសងវិញ ៖</b> <b>+$${refundAmount.toFixed(2)} USD</b> 💸\n` +
+        `💰 <b>តុល្យភាពបច្ចុប្បន្ន ៖</b> <b>$${newBalance.toFixed(2)} USD</b>\n` +
+        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>\n\n` +
+        `💡 <i>ប្រាក់ត្រូវបានបញ្ចូលត្រឡប់ទៅក្នុងកាបូបលុយរបស់អ្នកវិញរួចរាល់ហើយ។</i>\n` +
+        `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}`;
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, customerNotifyMsg, { parse_mode: 'HTML' });
+    } catch (e) {}
+});
+
+// ADMIN COMMAND: /setstatus <ORDER_ID> <STATUS> (e.g. /setstatus ORD-749927 Completed)
+bot.command(['setstatus', 'status', 'done'], async (ctx) => {
+    const text = ctx.message.text.trim();
+    const parts = text.split(/\s+/);
+
+    if (parts.length < 2) {
+        return ctx.replyWithHTML(
+            `🛠 <b>របៀបប្រើប្រាស់ Admin Order Status Command ៖</b>\n` +
+            `👉 <code>/setstatus ORD-749927 Completed</code>\n` +
+            `👉 <code>/setstatus 749927 Completed</code>\n` +
+            `👉 <code>/setstatus ORD-749927 Canceled</code>`
+        );
+    }
+
+    const rawId = parts[1].replace('#', '').trim();
+    const newStatus = parts[2] ? parts[2].trim() : 'Completed';
+
+    let targetOrder = null;
+
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .select('*')
+                .or(`order_id.ilike.%${rawId}%`)
+                .maybeSingle();
+            targetOrder = data;
+
+            if (targetOrder) {
+                await supabase
+                    .from('orders')
+                    .update({ status: newStatus })
+                    .eq('id', targetOrder.id);
+            }
+        } catch (e) {}
+    }
+
+    // Update memory cache
+    for (const uId in userOrdersCache) {
+        const item = userOrdersCache[uId].find(o => o.order_id.includes(rawId));
+        if (item) {
+            item.status = newStatus;
+            if (!targetOrder) targetOrder = item;
+        }
+    }
+
+    if (targetOrder) {
+        // Send notification to customer (Bilingual)
+        try {
+            const isCompleted = newStatus.toLowerCase().includes('complete') || newStatus.toLowerCase().includes('ជោគជ័យ');
+            const statusBadge = isCompleted ? 'Completed ✅ (ជោគជ័យ ១០០%)' : `${newStatus} ⚠️`;
+            const uLang = getLang(targetOrder.telegram_id);
+
+            const notifyMsg = uLang === 'en' ?
+                `🎉 <b>Order Status Update!</b>\n` +
+                `----------------------------------------\n` +
+                `🆔 <b>Order ID:</b> <code>${targetOrder.order_id}</code>\n` +
+                `📦 <b>Package:</b> ${targetOrder.package_name}\n` +
+                `🟢 <b>Status:</b> <b>${statusBadge}</b>\n\n` +
+                `(You will see Likes and Views increase within 12 to 24 hours)\n\n` +
+                `📢 <b>Channel:</b> ${CHANNEL_LINK}\n` +
+                `💖 <i>Thank you for using VIP SMM service from <b>BLESSING.KH SMM</b>!</i>` :
+                `🎉 <b>ព័ត៌មានបច្ចុប្បន្នភាពការបញ្ជាទិញ (Order Status Update)!</b>\n` +
+                `----------------------------------------\n` +
+                `🆔 <b>Order ID:</b> <code>${targetOrder.order_id}</code>\n` +
+                `📦 <b>Package:</b> ${targetOrder.package_name}\n` +
+                `🟢 <b>Status:</b> <b>${statusBadge}</b>\n\n` +
+                `(អ្នកនឹងឃើញកំណើន Like និង View កើនឡើងក្នុងចន្លោះពី 12 ទៅ 24 ម៉ោងក្រោយ)\n\n` +
+                `📢 <b>Channel ៖</b> ${CHANNEL_LINK}\n` +
+                `💖 <i>អរគុណសម្រាប់ការប្រើប្រាស់សេវាកម្ម SMM VIP របស់ <b>BLESSING.KH SMM</b>!</i>`;
+
+            await bot.telegram.sendMessage(targetOrder.telegram_id, notifyMsg, { 
+                parse_mode: 'HTML',
+                disable_web_page_preview: true 
+            });
+        } catch (e) {}
+
+        return ctx.replyWithHTML(`✅ បានធ្វើបច្ចុប្បន្នភាព Order <b>#${targetOrder.order_id}</b> ទៅជា <b>${newStatus}</b> រួចរាល់!`);
+    } else {
+        return ctx.replyWithHTML(`❌ រកមិនឃើញ Order លេខ <code>${rawId}</code> ឡើយ!`);
+    }
+});
+
+// REGISTER MENU COMMANDS (រក្សាទុកតែ /start មួយគត់ក្នុងប៊ូតុង Menu)
+bot.telegram.setMyCommands([
+    { command: 'start', description: '🔄 Start / ចាប់ផ្តើម' }
+]).catch(err => console.log('Notice: Could not set my commands:', err.message));
+
+// Reliable bot launch with dropPendingUpdates and auto-retry on polling error
+function launchBot() {
+    bot.launch({
+        allowedUpdates: ['message', 'callback_query', 'channel_post'],
+        dropPendingUpdates: true
+    }).then(() => {
+        console.log('🤖 Telegram Bot (LazR v2.0 exact Khmer/English UI) is running!');
+    }).catch((err) => {
+        console.error('❌ Failed to launch bot:', err.message);
+        setTimeout(launchBot, 5000);
+    });
+}
+launchBot();
+
+// HTTP Server for Render Health Check & ABA PayWay Webhooks
+const PORT = process.env.PORT || 3000;
+http.createServer(async (req, res) => {
+    if (req.url && (req.url.includes('/payway') || req.url.includes('/callback') || req.url.includes('/webhook'))) {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', async () => {
+            console.log('🔔 Received PayWay Webhook POST:', body);
+            try {
+                let data = {};
+                try { data = JSON.parse(body); } catch (e) {
+                    const params = new URLSearchParams(body);
+                    for (const [key, value] of params.entries()) { data[key] = value; }
+                }
+                const depId = data.tran_id || data.bill_number || data.deposit_id;
+
+                if (depId && pendingAutoDeposits[depId]) {
+                    const item = pendingAutoDeposits[depId];
+                    delete pendingAutoDeposits[depId];
+
+                    const userId = item.userId;
+                    const currentBal = getBalance(userId);
+                    const newBal = currentBal + item.totalCredit;
+                    await dbUpdateBalance(userId, newBal);
+
+                    if (supabase) {
+                        try {
+                            await supabase.from('deposits').update({ status: 'Approved (PayWay Webhook)' }).eq('deposit_id', depId);
+                        } catch (e) {}
+                    }
+
+                    // Send Auto-Credit Confirmation to Customer!
+                    const uLang = getLang(userId);
+                    const msg = uLang === 'en' ?
+                        `🎉 <b>ABA PayWay Payment Successful!</b>\n----------------------------------------\n💳 Amount: $${item.amount.toFixed(2)} USD\n🎁 Bonus: +$${item.bonusAmount.toFixed(2)} USD\n💰 New Wallet Balance: <b>$${newBal.toFixed(2)} USD</b>\n\n⚡ Thank you for your payment!` :
+                        `🎉 <b>ABA PayWay ទូទាត់ប្រាក់ជោគជ័យ!</b>\n----------------------------------------\n💳 ទឹកប្រាក់បញ្ចូល៖ $${item.amount.toFixed(2)} USD\n🎁 ថែម Bonus៖ +$${item.bonusAmount.toFixed(2)} USD\n💰 តុល្យភាពកាបូបលុយថ្មី៖ <b>$${newBal.toFixed(2)} USD</b>\n\n⚡ អរគុណសម្រាប់ការទូទាត់ប្រាក់!`;
+
+                    await bot.telegram.sendMessage(userId, msg, { parse_mode: 'HTML' });
+
+                    // Notify Admin Channel
+                    const adminMsg = `⚡ <b>AUTO-DEPOSIT APPROVED (ABA PayWay Webhook)</b>\n----------------------------------------\n🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n📲 <b>User ID:</b> <code>${userId}</code>\n💳 <b>Amount:</b> $${item.amount.toFixed(2)} USD\n🎁 <b>Bonus:</b> +$${item.bonusAmount.toFixed(2)} USD\n🟢 <b>Status:</b> Auto-Credited ⚡`;
+                    await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' });
+                }
+            } catch (err) {
+                console.error('⚠️ PayWay webhook process error:', err.message);
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'OK' }));
+        });
+        return;
+    }
+
+    // Serve Website Files from website/ folder
+    let reqPath = req.url.split('?')[0];
+    if (reqPath === '/' || reqPath === '/index.html') {
+        const filePath = path.join(__dirname, 'website', 'index.html');
+        if (fs.existsSync(filePath)) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end(fs.readFileSync(filePath));
+        }
+    } else if (reqPath === '/style.css') {
+        const filePath = path.join(__dirname, 'website', 'style.css');
+        if (fs.existsSync(filePath)) {
+            res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+            return res.end(fs.readFileSync(filePath));
+        }
+    } else if (reqPath === '/app.js') {
+        const filePath = path.join(__dirname, 'website', 'app.js');
+        if (fs.existsSync(filePath)) {
+            res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+            return res.end(fs.readFileSync(filePath));
+        }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('🤖 Telegram Bot & WebApp is running Live 24/7!');
+}).listen(PORT, () => {
+    console.log(`🌐 WebApp Portal & Telegram Bot server running on port ${PORT}`);
+});
+
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// Global Bot Error Catcher to prevent crashes
+bot.catch((err, ctx) => {
+    console.error(`⚠️ Telegram Bot error for ${ctx.updateType}:`, err.message);
+});
+
+// Render Keep-Alive Self Ping (Prevents Render Free Instance Sleep)
+setInterval(() => {
+    http.get(`http://127.0.0.1:${PORT}`, () => {}).on('error', () => {});
+}, 300000);

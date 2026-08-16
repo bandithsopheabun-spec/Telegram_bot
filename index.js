@@ -2729,6 +2729,7 @@ function getAdminMainKeyboard() {
         ['🎵 Users & Balances', '⚙️ Bot Settings'],
         ['🎁 Promotion Settings', '📊 Analytics & Reports'],
         ['🛠️ Tools & System', isBotOpen ? '🟢 · Bot: open' : '🔴 · Bot: maintenance'],
+        ['👥 · Manage Admins'],
         ['💸 · Exit to user']
     ]).resize();
 }
@@ -2768,14 +2769,13 @@ function getAdminSettingsKeyboard() {
         ['🖼️ · Change Mode1 QR Photo', '🏦 · PayWay Link'],
         [isAcledaPaymentOn ? '🏦 ACLEDA Auto-Pay: ✅ ON' : '🏦 ACLEDA Auto-Pay: ❌ OFF', '🔑 · Edit ACLEDA Token'],
         [isBakongPaymentOn ? '🏦 Bakong Payment: ✅ ON' : '🏦 Bakong Payment: ❌ OFF', '🇰🇭 · Edit Bakong ID'],
-        ['👥 · Manage Admins'],
         ['🔐 Admin Menu']
     ]).resize();
 }
 
 const adminManageAdminsKeyboard = Markup.keyboard([
     ['➕ Add Admin ID', '➖ Remove Admin ID'],
-    ['⚙️ Bot Settings', '🔐 Admin Menu']
+    ['🔐 Admin Menu']
 ]).resize();
 
 const adminToolsKeyboard = Markup.keyboard([

@@ -2620,6 +2620,7 @@ let depositMode = 'MANUAL'; // Default: Mode 1 - Manual Admin Approval ('MANUAL'
 let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
 const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
+const processedOrderActions = new Set(); // Prevents an order being Done AND Cancel/Refund'd (or either twice)
 let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/ABAPAYJj498612l';
 // howtoVideoLinks is declared earlier (near loadHowtoConfig/saveHowtoConfig) so the
 // startup loadHowtoConfig() call can assign it without a temporal-dead-zone error.
@@ -3447,6 +3448,11 @@ bot.action(/^confirm_dep/, async (ctx) => {
 
 // Admin clicks [ ✅ យល់ព្រម (Approve) ]
 bot.action(/^approve_dep/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
     const dataStr = ctx.callbackQuery.data;
     const parts = dataStr.split('_');
 
@@ -3455,6 +3461,16 @@ bot.action(/^approve_dep/, async (ctx) => {
     const targetUserId = parseInt(parts.pop()) || ctx.from.id;
     const depId = parts.slice(2).join('_') || 'DEP100000';
     const totalCredit = amount + bonus;
+
+    // Anti-double-click / anti-double-approval protection — an admin decision
+    // (approve or reject) on this deposit can only be made once.
+    if (processedDepositIds.has(`admin_decided_${depId}`)) {
+        try {
+            return ctx.answerCbQuery('⚠️ ការទូទាត់នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
+        } catch (e) { return; }
+    }
+    processedDepositIds.add(`admin_decided_${depId}`);
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
     const currentBal = getBalance(targetUserId);
     const newBal = currentBal + totalCredit;
@@ -3502,6 +3518,15 @@ bot.action(/^reject_dep_([^_]+)_([^_]+)$/, async (ctx) => {
 
     const depId = ctx.match[1];
     const targetUserId = parseInt(ctx.match[2]);
+
+    // Anti-double-click / anti-conflicting-decision protection — matches approve_dep.
+    if (processedDepositIds.has(`admin_decided_${depId}`)) {
+        try {
+            return ctx.answerCbQuery('⚠️ ការទូទាត់នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
+        } catch (e) { return; }
+    }
+    processedDepositIds.add(`admin_decided_${depId}`);
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
     if (supabase) {
         try {
@@ -3571,6 +3596,11 @@ bot.action(/^cancel_dep_([^_]+)$/, async (ctx) => {
 
 // Admin clicks [ ✅ ចុចបញ្ចប់ការទិញ (Done) ] in Group LazR v3.0 Supports
 bot.action(/^done_order_/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
     const dataStr = ctx.callbackQuery.data;
     const parts = dataStr.split('_');
 
@@ -3578,6 +3608,16 @@ bot.action(/^done_order_/, async (ctx) => {
     const rawOrderId = parts.slice(2).join('_');
     const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
     const adminName = ctx.from.first_name || 'Admin';
+
+    // Anti-double-click protection — also prevents an order being marked Done
+    // after it was already Cancel/Refund'd (or vice versa).
+    if (processedOrderActions.has(fullOrderId)) {
+        try {
+            return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
+        } catch (e) { return; }
+    }
+    processedOrderActions.add(fullOrderId);
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
     // 1. Update status in Supabase DB
     let targetOrder = null;
@@ -3653,6 +3693,11 @@ bot.action(/^done_order_/, async (ctx) => {
 
 // Admin clicks [ ❌ បោះបង់ & វេរលុយសង (Cancel/Refund) ] in Admin Channel
 bot.action(/^cancel_order_/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
     const dataStr = ctx.callbackQuery.data;
     const parts = dataStr.split('_');
 
@@ -3660,6 +3705,16 @@ bot.action(/^cancel_order_/, async (ctx) => {
     const rawOrderId = parts.slice(2).join('_');
     const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
     const adminName = ctx.from.first_name || 'Admin';
+
+    // Anti-double-click protection — also prevents a refund after the order
+    // was already marked Done (or a double refund from clicking twice).
+    if (processedOrderActions.has(fullOrderId)) {
+        try {
+            return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
+        } catch (e) { return; }
+    }
+    processedOrderActions.add(fullOrderId);
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
     let targetOrder = null;
 

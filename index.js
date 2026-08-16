@@ -548,6 +548,12 @@ function saveDynamicPackages() {
 
 const HOWTO_FILE = path.join(__dirname, 'howto_config.json');
 
+let howtoVideoLinks = [
+    'https://t.me/Blessing_Kh_Public/3',
+    'https://t.me/Blessing_Kh_Public/3',
+    'https://t.me/Blessing_Kh_Public/3'
+];
+
 function loadHowtoConfig() {
     try {
         if (fs.existsSync(HOWTO_FILE)) {
@@ -2549,11 +2555,8 @@ let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
 const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
 let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/ABAPAYJj498612l';
-let howtoVideoLinks = [
-    'https://t.me/Blessing_Kh_Public/3',
-    'https://t.me/Blessing_Kh_Public/3',
-    'https://t.me/Blessing_Kh_Public/3'
-];
+// howtoVideoLinks is declared earlier (near loadHowtoConfig/saveHowtoConfig) so the
+// startup loadHowtoConfig() call can assign it without a temporal-dead-zone error.
 
 // Authorized Admin Telegram IDs (Strict Security: Only 521984577)
 // Default admin IDs used only when ADMIN_IDS is not set in .env — set ADMIN_IDS

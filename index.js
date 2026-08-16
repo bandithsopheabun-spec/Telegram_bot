@@ -25,9 +25,13 @@ try {
 }
 
 let BakongKHQR = null;
+let KHQRIndividualInfo = null;
+let khqrDataConst = null;
 try {
     const khqrLib = require('bakong-khqr');
-    BakongKHQR = khqrLib.BakongKHQR || khqrLib;
+    BakongKHQR = khqrLib.BakongKHQR;
+    KHQRIndividualInfo = khqrLib.IndividualInfo;
+    khqrDataConst = khqrLib.khqrData;
 } catch (e) {
     console.log('Notice: bakong-khqr module loading safely...');
 }
@@ -169,36 +173,39 @@ function generateDynamicKhqr(merchantId, merchantName, amount, depositId) {
     const amtStr = amtNum.toFixed(2);
     const cleanDep = depositId.replace(/[^a-zA-Z0-9]/g, '');
 
-    // 1. Try NBC BakongKHQR SDK if available
-    if (BakongKHQR && BakongKHQR.generate) {
+    // 1. Try the official NBC BakongKHQR SDK (correct class-based API — generateIndividual()
+    //    on an instance, taking an IndividualInfo object, not a static .generate.individual()
+    //    call with positional args; that method never existed on this package).
+    if (BakongKHQR && KHQRIndividualInfo && khqrDataConst) {
         try {
-            const optionalData = {
-                currency: BakongKHQR.currency ? BakongKHQR.currency.usd : '840',
+            const individualInfo = new KHQRIndividualInfo(cleanMerchant, cleanName, 'Phnom Penh', {
+                currency: khqrDataConst.currency.usd,
                 amount: amtNum,
                 mobileNumber: '0979862190',
                 storeLabel: 'Blessing.Kh',
                 terminalLabel: 'Blessing.Kh',
-                billNumber: cleanDep
-            };
-            let khqrResult = null;
-            if (typeof BakongKHQR.generate.individual === 'function') {
-                khqrResult = BakongKHQR.generate.individual(cleanMerchant, cleanName, optionalData);
-            }
-            if (khqrResult && khqrResult.data && khqrResult.data.qr) {
+                billNumber: cleanDep,
+                // Dynamic (amount-bearing) KHQR requires an expiration timestamp (ms epoch) —
+                // matches the 30-minute pending-deposit window used elsewhere in this file.
+                expirationTimestamp: Date.now() + 30 * 60 * 1000
+            });
+            const response = new BakongKHQR().generateIndividual(individualInfo);
+            if (response && response.status && response.status.code === 0 && response.data && response.data.qr) {
                 console.log('📌 Official BakongKHQR SDK Generated QR successfully!');
-                return khqrResult.data.qr;
+                return response.data.qr;
             }
+            console.error('⚠️ BakongKHQR SDK returned an error status:', JSON.stringify(response && response.status));
         } catch (err) {
             console.error('⚠️ Official BakongKHQR SDK generate error:', err.message);
         }
     }
 
-    // 2. Official NBC EMVCo KHQR Standard Format (Tag 29 with km.gov.nbc.bakong Domain)
-    const nbcDomain = 'km.gov.nbc.bakong';
-    const sub00 = '00' + String(nbcDomain.length).padStart(2, '0') + nbcDomain;
-    const sub01 = '01' + String(cleanMerchant.length).padStart(2, '0') + cleanMerchant;
-    const subCombined = sub00 + sub01;
-    const tag29 = '29' + String(subCombined.length).padStart(2, '0') + subCombined;
+    // 2. Manual EMVCo/KHQR builder fallback — Tag 29 sub-field 00 holds the raw Bakong
+    // Account ID directly (per the official SDK's GlobalUniqueIdentifier), NOT a domain
+    // string. (A previous version wrongly nested a "km.gov.nbc.bakong" domain string here,
+    // producing an unscannable QR.)
+    const sub00 = '00' + String(cleanMerchant.length).padStart(2, '0') + cleanMerchant;
+    const tag29 = '29' + String(sub00.length).padStart(2, '0') + sub00;
 
     const tag00 = '000201';
     const tag01 = '010212'; // Dynamic QR (12)

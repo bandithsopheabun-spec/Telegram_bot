@@ -3783,6 +3783,7 @@ bot.telegram.setMyCommands([
 ]).catch(err => console.log('Notice: Could not set my commands:', err.message));
 
 // Reliable bot launch with dropPendingUpdates and auto-retry on polling error
+let isShuttingDown = false;
 function launchBot() {
     bot.launch({
         allowedUpdates: ['message', 'callback_query', 'channel_post'],
@@ -3791,7 +3792,10 @@ function launchBot() {
         console.log('🤖 Telegram Bot (LazR v2.0 exact Khmer/English UI) is running!');
     }).catch((err) => {
         console.error('❌ Failed to launch bot:', err.message);
-        setTimeout(launchBot, 5000);
+        // Don't keep retrying once we're shutting down (e.g. mid-redeploy) —
+        // otherwise the old instance spams 409 Conflict against the new one
+        // until Render force-kills it.
+        if (!isShuttingDown) setTimeout(launchBot, 5000);
     });
 }
 launchBot();
@@ -3882,8 +3886,8 @@ http.createServer(async (req, res) => {
     console.log(`🌐 WebApp Portal & Telegram Bot server running on port ${PORT} on 0.0.0.0`);
 });
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => { isShuttingDown = true; bot.stop('SIGINT'); process.exit(0); });
+process.once('SIGTERM', () => { isShuttingDown = true; bot.stop('SIGTERM'); process.exit(0); });
 
 // Global Bot Error Catcher to prevent crashes
 bot.catch((err, ctx) => {

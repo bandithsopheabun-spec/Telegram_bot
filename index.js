@@ -1141,19 +1141,27 @@ async function sendTopBuyersLeaderboard(ctx) {
         } catch (e) {}
     }
 
+    const websiteKb = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(lang === 'km' ? '👛 បញ្ចូលលុយដណ្តើមពាន' : '👛 Deposit Funds', 'profile_add_funds'),
+            Markup.button.callback(lang === 'km' ? '👤 គណនីរបស់ខ្ញុំ' : '👤 My VIP Profile', 'top_my_profile')
+        ],
+        [
+            Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+        ]
+    ]);
+
     if (!topList || topList.length === 0) {
-        topList = [
-            { telegram_id: '667389123', total: 345.50 },
-            { telegram_id: '136490214', total: 270.00 },
-            { telegram_id: '121289567', total: 250.00 },
-            { telegram_id: '722510234', total: 180.00 },
-            { telegram_id: '673299812', total: 150.00 },
-            { telegram_id: '113045678', total: 120.00 },
-            { telegram_id: '583312908', total: 95.00 },
-            { telegram_id: '600123901', total: 80.00 },
-            { telegram_id: '619478234', total: 65.00 },
-            { telegram_id: '512390123', total: 50.00 }
-        ];
+        // No real purchase data yet — show an honest empty state instead of
+        // fabricated buyer IDs/amounts (that would mislead real customers).
+        const emptyMsg = lang === 'km' ?
+            `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS LEADERBOARD</b> ] ━━━━━━━ 🏆\n\n` +
+            `👑 ពុំទាន់មានការបញ្ជាទិញគ្រប់គ្រាន់ដើម្បីបង្ហាញលេខរាំងនៅឡើយទេ។\n` +
+            `ក្លាយជាអ្នកទិញដំបូងគេ ដើម្បីឡើងចំណាត់ថ្នាក់លេខ១! 🚀` :
+            `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS LEADERBOARD</b> ] ━━━━━━━ 🏆\n\n` +
+            `👑 No purchases yet to build a leaderboard.\n` +
+            `Be the first buyer to claim the #1 spot! 🚀`;
+        return ctx.replyWithHTML(emptyMsg, { disable_web_page_preview: true, ...websiteKb, ...getMainKeyboard(lang) });
     }
 
     const titleText = lang === 'km' ?
@@ -1179,17 +1187,7 @@ async function sendTopBuyersLeaderboard(ctx) {
         `\n\n----------------------------------------\n` +
         `✨ <i>Thank you to all our VIP members for trusting BLESSING.KH SMM! 💖</i>`;
 
-    const leaderboardKb = Markup.inlineKeyboard([
-        [
-            Markup.button.callback(lang === 'km' ? '👛 បញ្ចូលលុយដណ្តើមពាន' : '👛 Deposit Funds', 'profile_add_funds'),
-            Markup.button.callback(lang === 'km' ? '👤 គណនីរបស់ខ្ញុំ' : '👤 My VIP Profile', 'top_my_profile')
-        ],
-        [
-            Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
-        ]
-    ]);
-
-    return ctx.replyWithHTML(titleText + itemsText + footerText, { disable_web_page_preview: true, ...leaderboardKb, ...getMainKeyboard(lang) });
+    return ctx.replyWithHTML(titleText + itemsText + footerText, { disable_web_page_preview: true, ...websiteKb, ...getMainKeyboard(lang) });
 }
 
 bot.hears(['🔝 កំពូលអ្នកទិញ', '🔝 Top Buyers', 'កំពូលអ្នកទិញ', 'Top Buyers'], async (ctx) => {
@@ -2386,7 +2384,11 @@ bot.on(['video', 'document'], (ctx) => {
     }
 });
 
-// 📈 TOP-UP REPORTS (EXACT VIDEO MATCH)
+// 📈 TOP-UP REPORTS (computed from real Supabase deposit records)
+function isSuccessfulDepositStatus(status) {
+    return !!status && (status.startsWith('Approved') || status === 'Completed');
+}
+
 bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
@@ -2394,38 +2396,102 @@ bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
 
-    const reportsMsg = 
-        `📈 <b>Top-up Reports</b>\n` +
-        `⏰ Generated: ${dateStr} ${now.toLocaleTimeString('en-US', { hour12: false })} (Cambodia Time)\n` +
-        `----------------------------------------\n\n` +
-        `📅 <b>Today's Top-up</b>\n` +
-        `💸 Total: <b>$321.51</b>\n\n` +
-        `📌 <b>This Week's Top-up</b>\n` +
-        `Period: ${dateStr} → ${dateStr}\n` +
-        `💸 Total: <b>$321.51</b>\n\n` +
-        `📆 <b>This Month's Top-up</b>\n` +
-        `August 2026\n` +
-        `💸 Total: <b>$3,628.55</b>\n\n` +
-        `📊 <b>Last 3 Months Top-up</b>\n` +
-        `Period: 2026-05-12 → ${dateStr}\n` +
-        `💸 Total: <b>$25,634.23</b>\n\n` +
-        `💰 <b>Total Top-up Since Bot Creation</b>\n` +
-        `💸 Total: <b>$26,214.36</b>`;
+    if (!supabase) {
+        return ctx.replyWithHTML(
+            `📈 <b>Top-up Reports</b>\n----------------------------------------\n\n` +
+            `⚠️ <b>Database មិនត្រូវបានភ្ជាប់ទេ (Supabase not configured)</b>\n` +
+            `មិនអាចគណនា report បានទេ លុះត្រាតែកំណត់ <code>SUPABASE_URL</code>/<code>SUPABASE_KEY</code>។`,
+            adminAnalyticsKeyboard
+        );
+    }
 
-    ctx.replyWithHTML(reportsMsg, adminAnalyticsKeyboard);
+    try {
+        const { data, error } = await supabase.from('deposits').select('amount, status, created_at');
+        if (error) throw error;
+
+        const successful = (data || []).filter(d => isSuccessfulDepositStatus(d.status));
+
+        const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
+        const startOfWeek = new Date(startOfDay); startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const start3Months = new Date(now); start3Months.setMonth(now.getMonth() - 3);
+
+        const sumSince = (since) => successful
+            .filter(d => new Date(d.created_at) >= since)
+            .reduce((acc, d) => acc + parseFloat(d.amount || 0), 0);
+
+        const todayTotal = sumSince(startOfDay);
+        const weekTotal = sumSince(startOfWeek);
+        const monthTotal = sumSince(startOfMonth);
+        const last3MonthsTotal = sumSince(start3Months);
+        const allTimeTotal = successful.reduce((acc, d) => acc + parseFloat(d.amount || 0), 0);
+
+        const reportsMsg =
+            `📈 <b>Top-up Reports</b>\n` +
+            `⏰ Generated: ${dateStr} ${now.toLocaleTimeString('en-US', { hour12: false })} (Cambodia Time)\n` +
+            `----------------------------------------\n\n` +
+            `📅 <b>Today's Top-up</b>\n💸 Total: <b>$${todayTotal.toFixed(2)}</b>\n\n` +
+            `📌 <b>This Week's Top-up</b>\n💸 Total: <b>$${weekTotal.toFixed(2)}</b>\n\n` +
+            `📆 <b>This Month's Top-up</b>\n💸 Total: <b>$${monthTotal.toFixed(2)}</b>\n\n` +
+            `📊 <b>Last 3 Months Top-up</b>\n💸 Total: <b>$${last3MonthsTotal.toFixed(2)}</b>\n\n` +
+            `💰 <b>Total Top-up Since Bot Creation</b>\n💸 Total: <b>$${allTimeTotal.toFixed(2)}</b>\n\n` +
+            `<i>(${successful.length} successful deposit(s) counted)</i>`;
+
+        ctx.replyWithHTML(reportsMsg, adminAnalyticsKeyboard);
+    } catch (e) {
+        console.error('⚠️ Top-up reports query error:', e.message);
+        ctx.replyWithHTML(
+            `📈 <b>Top-up Reports</b>\n----------------------------------------\n\n` +
+            `⚠️ <b>មិនអាចទាញទិន្នន័យបានទេ (query error)។</b>`,
+            adminAnalyticsKeyboard
+        );
+    }
 });
 
 // 📋 DEPOSIT LOG & PANEL BALANCE
-bot.hears(['📋 · Deposit log', '💰 · Panel balance', 'Deposit log', 'Panel balance'], (ctx) => {
+bot.hears(['📋 · Deposit log', '💰 · Panel balance', 'Deposit log', 'Panel balance'], async (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
 
-    const msg = 
-        `💰 <b>Panel Balance & Deposit Log</b>\n----------------------------------------\n\n` +
-        `💳 <b>Active System Wallet:</b> $500.00 USD\n` +
-        `📜 <b>Recent Log:</b> All deposit confirmations logged in DB & Admin Channel 🟢`;
+    if (!supabase) {
+        return ctx.replyWithHTML(
+            `💰 <b>Panel Balance & Deposit Log</b>\n----------------------------------------\n\n` +
+            `⚠️ <b>Database មិនត្រូវបានភ្ជាប់ទេ (Supabase not configured)</b>`,
+            adminAnalyticsKeyboard
+        );
+    }
 
-    ctx.replyWithHTML(msg, adminAnalyticsKeyboard);
+    try {
+        const { data: users } = await supabase.from('users').select('balance');
+        const totalWalletBalance = (users || []).reduce((acc, u) => acc + parseFloat(u.balance || 0), 0);
+
+        const { data: recentDeposits } = await supabase
+            .from('deposits')
+            .select('deposit_id, amount, status, created_at')
+            .order('created_at', { ascending: false })
+            .limit(5);
+
+        const logLines = (recentDeposits || []).length > 0
+            ? recentDeposits.map(d =>
+                `• <code>${d.deposit_id}</code> — $${parseFloat(d.amount || 0).toFixed(2)} — ${d.status}`
+              ).join('\n')
+            : 'មិនទាន់មាន deposit ណាមួយត្រូវបានកត់ត្រាទេ។';
+
+        const msg =
+            `💰 <b>Panel Balance & Deposit Log</b>\n----------------------------------------\n\n` +
+            `💳 <b>Total User Wallet Balances (all customers combined):</b> $${totalWalletBalance.toFixed(2)} USD\n` +
+            `<i>(សរុប balance ដែលអតិថិជនទាំងអស់កាន់កាប់ក្នុងកាបូបលុយ — មិនមែនចំណូលក្រុមហ៊ុនទេ)</i>\n\n` +
+            `📜 <b>Recent Deposits (last 5):</b>\n${logLines}`;
+
+        ctx.replyWithHTML(msg, adminAnalyticsKeyboard);
+    } catch (e) {
+        console.error('⚠️ Panel balance query error:', e.message);
+        ctx.replyWithHTML(
+            `💰 <b>Panel Balance & Deposit Log</b>\n----------------------------------------\n\n` +
+            `⚠️ <b>មិនអាចទាញទិន្នន័យបានទេ (query error)។</b>`,
+            adminAnalyticsKeyboard
+        );
+    }
 });
 
 // ⚙️ BOT SETTINGS MENU
@@ -2767,35 +2833,6 @@ bot.hears(['📊 · Bot metrics', 'Bot metrics'], async (ctx) => {
         `⚡ <b>System Uptime Status:</b> 🟢 <b>Online 24/7</b>`;
 
     ctx.replyWithHTML(metricsMsg, adminAnalyticsKeyboard);
-});
-
-// 📈 TOP-UP REPORTS (EXACT VIDEO MATCH)
-bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
-    const userId = ctx.from.id;
-    if (!isAdmin(userId)) return;
-
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
-
-    const reportsMsg = 
-        `📈 <b>Top-up Reports</b>\n` +
-        `⏰ Generated: ${dateStr} ${now.toLocaleTimeString('en-US', { hour12: false })} (Cambodia Time)\n` +
-        `----------------------------------------\n\n` +
-        `📅 <b>Today's Top-up</b>\n` +
-        `💸 Total: <b>$321.51</b>\n\n` +
-        `📌 <b>This Week's Top-up</b>\n` +
-        `Period: ${dateStr} → ${dateStr}\n` +
-        `💸 Total: <b>$321.51</b>\n\n` +
-        `📆 <b>This Month's Top-up</b>\n` +
-        `August 2026\n` +
-        `💸 Total: <b>$3,628.55</b>\n\n` +
-        `📊 <b>Last 3 Months Top-up</b>\n` +
-        `Period: 2026-05-12 → ${dateStr}\n` +
-        `💸 Total: <b>$25,634.23</b>\n\n` +
-        `💰 <b>Total Top-up Since Bot Creation</b>\n` +
-        `💸 Total: <b>$26,214.36</b>`;
-
-    ctx.replyWithHTML(reportsMsg, adminAnalyticsKeyboard);
 });
 
 // 💳 DEPOSIT MODE CYCLE TOGGLE ( 1. តម្រូវអនុម័ត -> 2. ACLEDA API -> 3. ABA PayWay -> 4. Bakong KHQR -> 1. តម្រូវអនុម័ត )

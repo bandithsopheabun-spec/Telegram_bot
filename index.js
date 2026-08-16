@@ -604,10 +604,40 @@ function saveMediaConfig(fileId) {
     }
 }
 
-// Load dynamic package prices, howto links, and start video media from disk on boot
+// Extra admins added at runtime via the bot's "Manage Admins" menu (persisted
+// separately from ADMIN_IDS/DEFAULT_ADMIN_IDS so the base/env admin list is
+// never touched by in-bot actions).
+const ADMINS_FILE = path.join(__dirname, 'admins_config.json');
+let extraAdminIds = [];
+
+function loadAdminsConfig() {
+    try {
+        if (fs.existsSync(ADMINS_FILE)) {
+            const parsed = JSON.parse(fs.readFileSync(ADMINS_FILE, 'utf8'));
+            if (Array.isArray(parsed)) {
+                extraAdminIds = parsed.map(id => parseInt(id)).filter(id => !isNaN(id));
+                console.log('✅ Loaded extraAdminIds from admins_config.json!');
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ Could not load admins_config.json:', e.message);
+    }
+}
+
+function saveAdminsConfig() {
+    try {
+        fs.writeFileSync(ADMINS_FILE, JSON.stringify(extraAdminIds, null, 2), 'utf8');
+        console.log('✅ Saved extraAdminIds to admins_config.json!');
+    } catch (e) {
+        console.error('⚠️ Could not save admins_config.json:', e.message);
+    }
+}
+
+// Load dynamic package prices, howto links, start video media, and extra admins from disk on boot
 loadDynamicPackages();
 loadHowtoConfig();
 loadMediaConfig();
+loadAdminsConfig();
 
 function updateDynamicPackagePrice(targetName, newPrice) {
     const targetClean = targetName.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -1422,6 +1452,56 @@ bot.on('text', async (ctx, next) => {
                     { parse_mode: 'HTML' }
                 );
             } catch (e) {}
+            return;
+        }
+
+        if (state.step === 'AWAITING_ADD_ADMIN_ID') {
+            delete userState[userId];
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+
+            if (!targetId || isNaN(targetId)) {
+                return ctx.replyWithHTML('❌ <b>Telegram ID មិនត្រឹមត្រូវ!</b> សូមផ្ញើតែជាលេខ (ឧទាហរណ៍ ៖ 521984577)។', adminManageAdminsKeyboard);
+            }
+            if (registeredAdminIds.has(targetId)) {
+                return ctx.replyWithHTML(`⚠️ <b>User ID <code>${targetId}</code> ជា Admin រួចហើយ!</b>`, adminManageAdminsKeyboard);
+            }
+
+            registeredAdminIds.add(targetId);
+            extraAdminIds.push(targetId);
+            saveAdminsConfig();
+
+            ctx.replyWithHTML(`✅ <b>បានបន្ថែម <code>${targetId}</code> ជា Admin ដោយជោគជ័យ!</b>`, adminManageAdminsKeyboard);
+
+            try {
+                await bot.telegram.sendMessage(targetId,
+                    `🎉 <b>អ្នកត្រូវបានតែងតាំងជា Admin សម្រាប់ BLESSING.KH SMM Bot!</b>\n\n` +
+                    `វាយ /admin ដើម្បីបើក Admin Panel។`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+            return;
+        }
+
+        if (state.step === 'AWAITING_REMOVE_ADMIN_ID') {
+            delete userState[userId];
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+
+            if (!targetId || isNaN(targetId)) {
+                return ctx.replyWithHTML('❌ <b>Telegram ID មិនត្រឹមត្រូវ!</b>', adminManageAdminsKeyboard);
+            }
+            if (!extraAdminIds.includes(targetId)) {
+                return ctx.replyWithHTML(
+                    `❌ <b>មិនអាចដកចេញបានទេ!</b>\n` +
+                    `<code>${targetId}</code> មិនមែនជា Admin ដែលបានបន្ថែមតាម Bot ទេ (ប្រហែលជា Base Admin ដែលកំណត់ក្នុង <code>ADMIN_IDS</code> — ត្រូវកែ env vars ដើម្បីដកចេញ)។`,
+                    adminManageAdminsKeyboard
+                );
+            }
+
+            registeredAdminIds.delete(targetId);
+            extraAdminIds = extraAdminIds.filter(id => id !== targetId);
+            saveAdminsConfig();
+
+            ctx.replyWithHTML(`✅ <b>បានដកចេញ <code>${targetId}</code> ពី Admin ដោយជោគជ័យ!</b>`, adminManageAdminsKeyboard);
             return;
         }
 
@@ -2634,6 +2714,8 @@ const registeredAdminIds = new Set(
         ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
         : DEFAULT_ADMIN_IDS
 );
+// Merge in admins added at runtime via the "Manage Admins" menu (loaded from admins_config.json above)
+extraAdminIds.forEach(id => registeredAdminIds.add(id));
 
 function isAdmin(userId) {
     if (!userId) return false;
@@ -2686,9 +2768,15 @@ function getAdminSettingsKeyboard() {
         ['🖼️ · Change Mode1 QR Photo', '🏦 · PayWay Link'],
         [isAcledaPaymentOn ? '🏦 ACLEDA Auto-Pay: ✅ ON' : '🏦 ACLEDA Auto-Pay: ❌ OFF', '🔑 · Edit ACLEDA Token'],
         [isBakongPaymentOn ? '🏦 Bakong Payment: ✅ ON' : '🏦 Bakong Payment: ❌ OFF', '🇰🇭 · Edit Bakong ID'],
+        ['👥 · Manage Admins'],
         ['🔐 Admin Menu']
     ]).resize();
 }
+
+const adminManageAdminsKeyboard = Markup.keyboard([
+    ['➕ Add Admin ID', '➖ Remove Admin ID'],
+    ['⚙️ Bot Settings', '🔐 Admin Menu']
+]).resize();
 
 const adminToolsKeyboard = Markup.keyboard([
     ['🎥 · Start media', '🎥 · How to links'],
@@ -2940,6 +3028,38 @@ bot.hears(['🇰🇭 · Edit Bakong ID', 'Edit Bakong ID', 'Edit Bakong'], (ctx)
         `✍️ <b>សូមផ្ញើ Bakong Account ID ថ្មីរបស់អ្នក ( ឧទាហរណ៍ ៖ blessing_kh@aclb ) ៖</b>`;
 
     ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 👥 MANAGE ADMINS (View list / Add / Remove admin by Telegram ID)
+bot.hears(['👥 · Manage Admins', 'Manage Admins'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const baseAdmins = Array.from(registeredAdminIds).filter(id => !extraAdminIds.includes(id));
+    const listText =
+        `👥 <b>Manage Admins</b>\n----------------------------------------\n\n` +
+        `🔒 <b>Base Admins</b> (កំណត់ក្នុង <code>ADMIN_IDS</code>/code, ត្រូវកែ env ដើម្បីដកចេញ):\n` +
+        (baseAdmins.length > 0 ? baseAdmins.map(id => `• <code>${id}</code>`).join('\n') : '—') +
+        `\n\n➕ <b>Added via Bot</b> (អាចដកចេញបានតាមម៉ឺនុយនេះ):\n` +
+        (extraAdminIds.length > 0 ? extraAdminIds.map(id => `• <code>${id}</code>`).join('\n') : 'មិនទាន់មាន') +
+        `\n\n👇 ជ្រើសរើសសកម្មភាពខាងក្រោម ៖`;
+
+    ctx.replyWithHTML(listText, adminManageAdminsKeyboard);
+});
+
+bot.hears(['➕ Add Admin ID'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADD_ADMIN_ID' };
+    ctx.replyWithHTML(`🆔 <b>សូមផ្ញើ Telegram User ID របស់អ្នកដែលចង់ដាក់ជា Admin ៖</b>\n<i>(ស្នើសុំពី @userinfobot ឬឱ្យគេផ្ញើ /id ទៅ Bot នេះ)</i>`, Markup.keyboard([['👥 · Manage Admins']]).resize());
+});
+
+bot.hears(['➖ Remove Admin ID'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_REMOVE_ADMIN_ID' };
+    ctx.replyWithHTML(`🆔 <b>សូមផ្ញើ Telegram User ID ដែលចង់ដកចេញពី Admin ៖</b>\n<i>(អាចដកចេញបានតែ ID ដែលបានបន្ថែមតាម Bot ប៉ុណ្ណោះ)</i>`, Markup.keyboard([['👥 · Manage Admins']]).resize());
 });
 
 // 🛠️ TOOLS & SYSTEM MENU

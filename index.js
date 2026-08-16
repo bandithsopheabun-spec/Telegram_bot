@@ -2555,10 +2555,10 @@ let howtoVideoLinks = [
     'https://t.me/Blessing_Kh_Public/3'
 ];
 
-// Authorized Admin Telegram IDs (Strict Security: Only 521984577 & 8759289483)
+// Authorized Admin Telegram IDs (Strict Security: Only 521984577)
 // Default admin IDs used only when ADMIN_IDS is not set in .env — set ADMIN_IDS
 // to take full, exclusive control of who has admin access.
-const DEFAULT_ADMIN_IDS = [521984577, 8759289483];
+const DEFAULT_ADMIN_IDS = [521984577];
 const registeredAdminIds = new Set(
     process.env.ADMIN_IDS
         ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))

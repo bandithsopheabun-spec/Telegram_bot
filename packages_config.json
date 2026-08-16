@@ -1,0 +1,32 @@
+{
+  "likes": [
+    { "name": "❤️ 549 - 1.2K Likes + 👀 700 - 2.5K Views", "price": 1.99 },
+    { "name": "❤️ 900 - 2.5K Likes + 👀 1.5K - 4.5K Views", "price": 3.00 },
+    { "name": "❤️ 3K - 6.8K Likes + 👀 4.5K - 15.5K Views", "price": 8.00 },
+    { "name": "❤️ 6.6K - 14.8K Likes + 👀 9.5K - 38.5K Views", "price": 16.00 },
+    { "name": "❤️ 15K - 34K Likes + 👀 22.5K - 77K Views", "price": 35.00 },
+    { "name": "❤️ 35.7K - 80K Likes + 👀 50.5K - 180K Views", "price": 80.00 },
+    { "name": "❤️ 73.5K - 168K Likes + 👀 110K - 360K Views", "price": 150.00 },
+    { "name": "❤️ 297K - 668K Likes + 👀 450K - 1.2M Views", "price": 500.00 }
+  ],
+  "views": [
+    { "name": "👀 2.4K - 8.2K Views + Likes Random", "price": 1.99 },
+    { "name": "👀 4.2K - 14.4K Views + Likes Random", "price": 3.00 },
+    { "name": "👀 13.2K - 45.3K Views + Likes Random", "price": 8.00 },
+    { "name": "👀 28.9K - 98.9K Views + Likes Random", "price": 16.00 },
+    { "name": "👀 66.3K - 226.8K Views + Likes Random", "price": 35.00 },
+    { "name": "👀 156.7K - 526.1K Views + Likes Random", "price": 80.00 },
+    { "name": "👀 325.5K - 1.11M Views + Likes Random", "price": 150.00 },
+    { "name": "👀 1.3M - 4.5M Views + Likes Random", "price": 500.00 }
+  ],
+  "followers": [
+    { "name": "👥 18 - 90 Khmer Followers + Likes & Views", "price": 1.99 },
+    { "name": "👥 32 - 160 Khmer Followers + Likes & Views", "price": 3.00 },
+    { "name": "👥 100 - 500 Khmer Followers + Likes & Views", "price": 8.00 },
+    { "name": "👥 210 - 659 Khmer Followers + Likes & Views", "price": 16.00 },
+    { "name": "👥 501 - 992 Khmer Followers + Likes & Views", "price": 35.00 },
+    { "name": "👥 1183 - 1624 Khmer Followers + Likes & Views", "price": 80.00 },
+    { "name": "👥 2456 - 2897 Khmer Followers + Likes & Views", "price": 150.00 },
+    { "name": "👥 9822 - 10263 Khmer Followers + Likes & Views", "price": 500.00 }
+  ]
+}

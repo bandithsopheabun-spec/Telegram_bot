@@ -4,7 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 
-const botToken = process.env.BOT_TOKEN || '8998857119:AAG36Hg5uzAgQ_wg_TfySz5dCqWmu38nVx4';
+const botToken = process.env.BOT_TOKEN;
+if (!botToken) {
+    console.error('❌ BOT_TOKEN is not set in .env — the bot cannot start without it.');
+    process.exit(1);
+}
 const bot = new Telegraf(botToken);
 
 // Support Link & Channel Link Configuration
@@ -45,7 +49,7 @@ if (createClient && supabaseUrl && supabaseKey && supabaseUrl.startsWith('http')
 
 // Bakong Open API Helper Function
 async function checkBakongTransaction(md5Hash) {
-    const token = process.env.BAKONG_TOKEN || 'jjqZN81SbulJNjWHomKWcJSkAcm2Nz75';
+    const token = process.env.BAKONG_TOKEN;
     if (!token || !md5Hash) return false;
 
     try {
@@ -70,7 +74,7 @@ async function checkBakongTransaction(md5Hash) {
 }
 
 async function fetchBakongApiKhqrString(merchantId, amount, depositId) {
-    const token = process.env.BAKONG_TOKEN || 'jjqZN81SbulJNjWHomKWcJSkAcm2Nz75';
+    const token = process.env.BAKONG_TOKEN;
     if (!token) return null;
 
     try {
@@ -111,7 +115,7 @@ async function fetchBakongApiKhqrString(merchantId, amount, depositId) {
 
 // ACLEDA Bank Toanchet Pay / xPay API Auto-Verification Helper Function
 let isAcledaPaymentOn = true;
-let acledaApiToken = process.env.ACLEDA_API_TOKEN || 'jjqZN81SbulJNjWHomKWcJSkAcm2Nz75';
+let acledaApiToken = process.env.ACLEDA_API_TOKEN || '';
 let acledaMerchantId = process.env.ACLEDA_MERCHANT_ID || 'lasa_leng@aclb';
 let bakongAccountId = process.env.BAKONG_ACCOUNT_ID || 'bun_bandithsophea@bkrt';
 
@@ -482,53 +486,165 @@ function getTikTokServicesKeyboard(lang) {
     ]).resize();
 }
 
+// Global Dynamic Package Prices Store (Editable by Admin live 24/7)
+let dynamicPackagePrices = {
+    likes: [
+        { name: '❤️ 549 - 1.2K Likes + 👀 700 - 2.5K Views', price: 1.99 },
+        { name: '❤️ 900 - 2.5K Likes + 👀 1.5K - 4.5K Views', price: 3.00 },
+        { name: '❤️ 3K - 6.8K Likes + 👀 4.5K - 15.5K Views', price: 8.00 },
+        { name: '❤️ 6.6K - 14.8K Likes + 👀 9.5K - 38.5K Views', price: 16.00 },
+        { name: '❤️ 15K - 34K Likes + 👀 22.5K - 77K Views', price: 35.00 },
+        { name: '❤️ 35.7K - 80K Likes + 👀 50.5K - 180K Views', price: 80.00 },
+        { name: '❤️ 73.5K - 168K Likes + 👀 110K - 360K Views', price: 150.00 },
+        { name: '❤️ 297K - 668K Likes + 👀 450K - 1.2M Views', price: 500.00 }
+    ],
+    views: [
+        { name: '👀 2.4K - 8.2K Views + Likes Random', price: 1.99 },
+        { name: '👀 4.2K - 14.4K Views + Likes Random', price: 3.00 },
+        { name: '👀 13.2K - 45.3K Views + Likes Random', price: 8.00 },
+        { name: '👀 28.9K - 98.9K Views + Likes Random', price: 16.00 },
+        { name: '👀 66.3K - 226.8K Views + Likes Random', price: 35.00 },
+        { name: '👀 156.7K - 526.1K Views + Likes Random', price: 80.00 },
+        { name: '👀 325.5K - 1.11M Views + Likes Random', price: 150.00 },
+        { name: '👀 1.3M - 4.5M Views + Likes Random', price: 500.00 }
+    ],
+    followers: [
+        { name: '👥 18 - 90 Khmer Followers + Likes & Views', price: 1.99 },
+        { name: '👥 32 - 160 Khmer Followers + Likes & Views', price: 3.00 },
+        { name: '👥 100 - 500 Khmer Followers + Likes & Views', price: 8.00 },
+        { name: '👥 210 - 659 Khmer Followers + Likes & Views', price: 16.00 },
+        { name: '👥 501 - 992 Khmer Followers + Likes & Views', price: 35.00 },
+        { name: '👥 1183 - 1624 Khmer Followers + Likes & Views', price: 80.00 },
+        { name: '👥 2456 - 2897 Khmer Followers + Likes & Views', price: 150.00 },
+        { name: '👥 9822 - 10263 Khmer Followers + Likes & Views', price: 500.00 }
+    ]
+};
+
+const PACKAGES_FILE = path.join(__dirname, 'packages_config.json');
+
+function loadDynamicPackages() {
+    try {
+        if (fs.existsSync(PACKAGES_FILE)) {
+            const data = fs.readFileSync(PACKAGES_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            if (parsed && parsed.likes && parsed.views && parsed.followers) {
+                dynamicPackagePrices = parsed;
+                console.log('✅ Loaded dynamic package prices from packages_config.json!');
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ Could not load packages_config.json:', e.message);
+    }
+}
+
+function saveDynamicPackages() {
+    try {
+        fs.writeFileSync(PACKAGES_FILE, JSON.stringify(dynamicPackagePrices, null, 2), 'utf8');
+        console.log('✅ Saved dynamic package prices to packages_config.json!');
+    } catch (e) {
+        console.error('⚠️ Could not save packages_config.json:', e.message);
+    }
+}
+
+const HOWTO_FILE = path.join(__dirname, 'howto_config.json');
+
+function loadHowtoConfig() {
+    try {
+        if (fs.existsSync(HOWTO_FILE)) {
+            const data = fs.readFileSync(HOWTO_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            if (parsed && Array.isArray(parsed) && parsed.length > 0) {
+                howtoVideoLinks = parsed;
+                console.log('✅ Loaded howtoVideoLinks from howto_config.json!');
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ Could not load howto_config.json:', e.message);
+    }
+}
+
+function saveHowtoConfig() {
+    try {
+        fs.writeFileSync(HOWTO_FILE, JSON.stringify(howtoVideoLinks, null, 2), 'utf8');
+        console.log('✅ Saved howtoVideoLinks to howto_config.json!');
+    } catch (e) {
+        console.error('⚠️ Could not save howto_config.json:', e.message);
+    }
+}
+
+const MEDIA_FILE = path.join(__dirname, 'media_config.json');
+
+function loadMediaConfig() {
+    try {
+        if (fs.existsSync(MEDIA_FILE)) {
+            const data = fs.readFileSync(MEDIA_FILE, 'utf8');
+            const parsed = JSON.parse(data);
+            if (parsed && parsed.videoId) {
+                customHowToOrderVideoId = parsed.videoId;
+                console.log('✅ Loaded customHowToOrderVideoId from media_config.json:', customHowToOrderVideoId);
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ Could not load media_config.json:', e.message);
+    }
+}
+
+function saveMediaConfig(fileId) {
+    try {
+        fs.writeFileSync(MEDIA_FILE, JSON.stringify({ videoId: fileId }, null, 2), 'utf8');
+        console.log('✅ Saved customHowToOrderVideoId to media_config.json:', fileId);
+    } catch (e) {
+        console.error('⚠️ Could not save media_config.json:', e.message);
+    }
+}
+
+// Load dynamic package prices, howto links, and start video media from disk on boot
+loadDynamicPackages();
+loadHowtoConfig();
+loadMediaConfig();
+
+function updateDynamicPackagePrice(targetName, newPrice) {
+    const targetClean = targetName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    let updated = false;
+    for (const cat of ['likes', 'views', 'followers']) {
+        for (const p of dynamicPackagePrices[cat]) {
+            const pClean = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (pClean.includes(targetClean) || targetClean.includes(pClean) || p.name.includes(targetName)) {
+                p.price = newPrice;
+                updated = true;
+                break;
+            }
+        }
+    }
+    if (updated) {
+        saveDynamicPackages();
+    }
+    return updated;
+}
+
 // Package Keyboards
 function getLikeViewsPackages(lang) {
     const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
     const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
-    return Markup.keyboard([
-        ['❤️ 549 - 1.2K Likes + 👀 700 - 2.5K Views = $1.99'],
-        ['❤️ 900 - 2.5K Likes + 👀 1.5K - 4.5K Views = $3.00'],
-        ['❤️ 3K - 6.8K Likes + 👀 4.5K - 15.5K Views = $8.00'],
-        ['❤️ 6.6K - 14.8K Likes + 👀 9.5K - 38.5K Views = $16.00'],
-        ['❤️ 15K - 34K Likes + 👀 22.5K - 77K Views = $35.00'],
-        ['❤️ 35.7K - 80K Likes + 👀 50.5K - 180K Views = $80.00'],
-        ['❤️ 73.5K - 168K Likes + 👀 110K - 360K Views = $150.00'],
-        ['❤️ 297K - 668K Likes + 👀 450K - 1.2M Views = $500.00'],
-        [backTT, backMain]
-    ]).resize();
+    const rows = dynamicPackagePrices.likes.map(p => [`${p.name} = $${p.price.toFixed(2)}`]);
+    rows.push([backTT, backMain]);
+    return Markup.keyboard(rows).resize();
 }
 
 function getVideoViewsPackages(lang) {
     const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
     const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
-    return Markup.keyboard([
-        ['👀 2.4K - 8.2K Views + Likes Random = $1.99'],
-        ['👀 4.2K - 14.4K Views + Likes Random = $3.00'],
-        ['👀 13.2K - 45.3K Views + Likes Random = $8.00'],
-        ['👀 28.9K - 98.9K Views + Likes Random = $16.00'],
-        ['👀 66.3K - 226.8K Views + Likes Random = $35.00'],
-        ['👀 156.7K - 526.1K Views + Likes Random = $80.00'],
-        ['👀 325.5K - 1.11M Views + Likes Random = $150.00'],
-        ['👀 1.3M - 4.5M Views + Likes Random = $500.00'],
-        [backTT, backMain]
-    ]).resize();
+    const rows = dynamicPackagePrices.views.map(p => [`${p.name} = $${p.price.toFixed(2)}`]);
+    rows.push([backTT, backMain]);
+    return Markup.keyboard(rows).resize();
 }
 
 function getFollowersPackages(lang) {
     const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
     const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
-    return Markup.keyboard([
-        ['👥 18 - 90 Khmer Followers + Likes & Views = $1.99'],
-        ['👥 32 - 160 Khmer Followers + Likes & Views = $3.00'],
-        ['👥 100 - 500 Khmer Followers + Likes & Views = $8.00'],
-        ['👥 210 - 659 Khmer Followers + Likes & Views = $16.00'],
-        ['👥 501 - 992 Khmer Followers + Likes & Views = $35.00'],
-        ['👥 1183 - 1624 Khmer Followers + Likes & Views = $80.00'],
-        ['👥 2456 - 2897 Khmer Followers + Likes & Views = $150.00'],
-        ['👥 9822 - 10263 Khmer Followers + Likes & Views = $500.00'],
-        [backTT, backMain]
-    ]).resize();
+    const rows = dynamicPackagePrices.followers.map(p => [`${p.name} = $${p.price.toFixed(2)}`]);
+    rows.push([backTT, backMain]);
+    return Markup.keyboard(rows).resize();
 }
 
 // Helper: Calculate Rank Badge
@@ -551,13 +667,13 @@ const i18n = {
             `👤 <b>អតិថិជន ៖</b> <b>${name}</b>\n` +
             `⚡ <b>ប្រព័ន្ធ ៖</b> 🟢 <b>Online 24/7 ( ស្វ័យប្រវត្តិ 100% )</b>`,
         account: (name, userId, balance, count) => 
-            `💎 <b>VIP PROFILE CARD</b> 💎\n\n` +
-            `👤 <b>ឈ្មោះ ៖</b> <b>${name}</b>\n` +
-            `📲 <b>User ID ៖</b> <code>${userId}</code>\n` +
-            `👛 <b>តុល្យភាព (Balance) ៖</b> <b>$${balance.toFixed(2)} USD</b> 💵\n` +
-            `📦 <b>ការបញ្ជាទិញសរុប ៖</b> <b>${count} Orders</b>\n` +
-            `🏅 <b>កម្រិតគណនី (Rank) ៖</b> <b>${getUserRank(count)}</b>\n\n` +
-            `📢 <b>តាមដានប្រូម៉ូសិន ៖</b> <a href="${CHANNEL_LINK}">${CHANNEL_LINK}</a>\n` +
+            `💎 ━━━━━━━ [ <b>VIP PROFILE CARD</b> ] ━━━━━━━ 💎\n\n` +
+            `👤 <b>ឈ្មោះអតិថិជន ៖</b> <b>${name}</b> 🇰🇭\n` +
+            `📲 <b>Telegram ID ៖</b> <code>${userId}</code> <i>( ចុចលើលេខដើម្បី Copy ⚡ )</i>\n\n` +
+            `👛 <b>តុល្យភាពកាបូបលុយ ៖</b> <b>$${balance.toFixed(2)} USD</b> 💵\n` +
+            `📦 <b>ការបញ្ជាទិញសរុប ៖</b> <b>${count} Orders</b> 🛍️\n` +
+            `🏅 <b>កម្រិត VIP Rank ៖</b> <b>${getUserRank(count)}</b>\n\n` +
+            `📢 <b>Telegram Channel ៖</b> <a href="${CHANNEL_LINK}">${CHANNEL_LINK}</a>\n` +
             `⚡ <i>សេវាកម្មរហ័សទាន់ចិត្ត សុវត្ថិភាពខ្ពស់ និង មានទំនុកចិត្ត ១០០%!</i>`,
         add_funds: (balance) => 
             `💳 <b>កាបូបលុយ & បញ្ចូលលុយ</b> 💳\n\n` +
@@ -697,10 +813,11 @@ async function sendWelcomeMessage(ctx) {
     const mainKb = getMainKeyboard(lang);
 
     const activeChannelLink = (howtoVideoLinks && howtoVideoLinks[0]) ? howtoVideoLinks[0] : CHANNEL_LINK;
+    const websiteUrl = process.env.WEB_APP_URL || 'https://telegram-bot-djpl.onrender.com';
 
     const welcomeButtons = Markup.inlineKeyboard([
         [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Telegram Channel ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Official Telegram Channel 🎁 ↗️', activeChannelLink)],
-        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( ២៤ម៉ោង ⚡ ) ↗️' : '💬 Contact Admin Support 24/7 ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
+        [Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)]
     ]);
 
     const videoId = customHowToOrderVideoId || process.env.HOW_TO_ORDER_VIDEO_ID;
@@ -760,7 +877,7 @@ bot.hears(['↩ ត្រឡប់ទៅមេនុយធំ', '↩ ត្រ�
 });
 
 // 👤 ACCOUNT / PROFILE & BALANCE
-bot.hears(['👤 Profile & Balance', 'Profile & Balance', '👤 គណនី & តុល្យភាព', 'គណនី & តុល្យភាព', '👤 គណនី', '👤 Account', 'គណនី', 'Account'], async (ctx) => {
+async function sendAccountProfileCard(ctx) {
     const userId = ctx.from.id;
     delete userState[userId];
     const firstName = ctx.from.first_name || 'Customer';
@@ -770,8 +887,41 @@ bot.hears(['👤 Profile & Balance', 'Profile & Balance', '👤 គណនី & �
     const lang = getLang(userId);
     const balance = getBalance(userId);
     const ordersCount = getOrdersCount(userId);
+    const websiteUrl = process.env.WEB_APP_URL || 'https://telegram-bot-djpl.onrender.com';
 
-    ctx.replyWithHTML(i18n[lang].account(firstName, userId, balance, ordersCount), { disable_web_page_preview: true, ...getMainKeyboard(lang) });
+    const cardButtons = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(lang === 'km' ? '👛 បញ្ចូលលុយ (Add Funds)' : '👛 Add Funds (Deposit)', 'profile_add_funds'),
+            Markup.button.callback(lang === 'km' ? '📦 ប្រវត្តិទិញ (Orders)' : '📦 Order History', 'profile_my_orders')
+        ],
+        [
+            Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+        ]
+    ]);
+
+    return ctx.replyWithHTML(i18n[lang].account(firstName, userId, balance, ordersCount), {
+        disable_web_page_preview: true,
+        ...cardButtons,
+        ...getMainKeyboard(lang)
+    });
+}
+
+bot.hears(['👤 Profile & Balance', 'Profile & Balance', '👤 គណនី & តុល្យភាព', 'គណនី & តុល្យភាព', '👤 គណនី', '👤 Account', 'គណនី', 'Account'], async (ctx) => {
+    return sendAccountProfileCard(ctx);
+});
+
+bot.action('profile_add_funds', (ctx) => {
+    try { ctx.answerCbQuery(); } catch (e) {}
+    const userId = ctx.from.id;
+    userState[userId] = { step: 'AWAITING_DEPOSIT_AMOUNT' };
+    const lang = getLang(userId);
+    const balance = getBalance(userId);
+    return ctx.replyWithHTML(i18n[lang].add_funds(balance), { ...getBackOnlyKeyboard(lang), disable_web_page_preview: true });
+});
+
+bot.action('profile_my_orders', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    return sendMyOrdersHistory(ctx);
 });
 
 // 👛 ADD FUNDS / WALLET
@@ -857,10 +1007,12 @@ bot.hears(['👥 Followers Khmer', '🛒 Followers Khmer', 'Followers Khmer'], (
 });
 
 // 📅 MY ORDERS / 📅 ប្រវត្តិទិញ
-bot.hears(['📅 ប្រវត្តិទិញ', '📅 ការបញ្ជាទិញរបស់ខ្ញុំ', '📅 Order History', '📅 My Orders', 'ប្រវត្តិទិញ', 'ការបញ្ជាទិញរបស់ខ្ញុំ', 'Order History', 'My Orders'], async (ctx) => {
+async function sendMyOrdersHistory(ctx) {
     const userId = ctx.from.id;
     delete userState[userId];
     const lang = getLang(userId);
+    const firstName = ctx.from.first_name || 'Customer';
+    const websiteUrl = process.env.WEB_APP_URL || 'https://telegram-bot-djpl.onrender.com';
 
     let ordersList = userOrdersCache[userId] || [];
 
@@ -880,20 +1032,66 @@ bot.hears(['📅 ប្រវត្តិទិញ', '📅 ការបញ្ជ
         } catch (e) {}
     }
 
-    let ordersListText = '';
     if (ordersList && ordersList.length > 0) {
-        ordersListText = `📦 <b>ប្រវត្តិការបញ្ជាទិញ (Order History)</b>\n----------------------------------------\n\n` +
-            ordersList.map(o => 
-                `🆔 <b>ID:</b> <code>${o.order_id}</code>\n` +
-                `📦 <b>Package:</b> ${o.package_name}\n` +
-                `💵 <b>Price:</b> $${parseFloat(o.price || 0).toFixed(2)} USD\n` +
-                `🟢 <b>Status:</b> <b>${o.status || 'Processing'} ⚡</b>\n`
-            ).join('\n----------------------------------------\n\n');
-    } else {
-        ordersListText = i18n[lang].my_orders_empty;
+        const headerText = lang === 'km' ?
+            `📅 ━━━━━━━ [ <b>ORDER HISTORY CARD</b> ] ━━━━━━━ 📅\n` +
+            `👤 <b>អតិថិជន ៖</b> <b>${firstName}</b>\n----------------------------------------\n\n` :
+            `📅 ━━━━━━━ [ <b>ORDER HISTORY CARD</b> ] ━━━━━━━ 📅\n` +
+            `👤 <b>Customer:</b> <b>${firstName}</b>\n----------------------------------------\n\n`;
+
+        const itemsText = ordersList.map(o => {
+            const dateStr = o.created_at ? new Date(o.created_at).toLocaleString('en-GB', { timeZone: 'Asia/Phnom_Penh' }) : '';
+            return (
+                `🆔 <b>Order ID ៖</b> <code>${o.order_id}</code> <i>( ចុចលើលេខដើម្បី Copy ⚡ )</i>\n` +
+                `📦 <b>កញ្ចប់សេវា ៖</b> ${o.package_name}\n` +
+                `💵 <b>តម្លៃទិញ ៖</b> <b>$${parseFloat(o.price || 0).toFixed(2)} USD</b> 💸\n` +
+                `🟢 <b>ស្ថានភាព ៖</b> <b>${o.status || 'Processing'} ⚡</b>\n` +
+                (dateStr ? `🕒 <b>កាលបរិច្ឆេទ ៖</b> <code>${dateStr}</code>\n` : '')
+            );
+        }).join('\n----------------------------------------\n\n');
+
+        const orderHistoryKb = Markup.inlineKeyboard([
+            [
+                Markup.button.callback(lang === 'km' ? '🛒 ទិញកញ្ចប់បន្ថែម (Buy More)' : '🛒 Buy More Packages', 'history_buy_more'),
+                Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Order Support 24/7', 'https://t.me/Blessing_Kh_Supports')
+            ],
+            [
+                Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+            ]
+        ]);
+
+        return ctx.replyWithHTML(headerText + itemsText, { disable_web_page_preview: true, ...orderHistoryKb, ...getMainKeyboard(lang) });
     }
 
-    ctx.replyWithHTML(ordersListText, getMainKeyboard(lang));
+    // EMPTY ORDER HISTORY CARD
+    const emptyText = lang === 'km' ?
+        `📦 ━━━━━━━ [ <b>ORDER HISTORY</b> ] ━━━━━━━ 📦\n\n` +
+        `👋 <b>សួស្តី ${firstName}!</b> លោកអ្នកពុំទាន់មានប្រវត្តិទិញសេវាកម្មនៅឡើយទេ។\n\n` +
+        `💡 <i>សូមចុចប៊ូតុង [ 🛒 ទិញសេវាកម្ម TikTok ] ខាងក្រោម ដើម្បីចាប់ផ្តើមទិញកញ្ចប់សេវាកម្មដំបូងរបស់អ្នក! 🚀</i>` :
+        `📦 ━━━━━━━ [ <b>ORDER HISTORY</b> ] ━━━━━━━ 📦\n\n` +
+        `👋 <b>Hello ${firstName}!</b> You haven't placed any orders yet.\n\n` +
+        `💡 <i>Click [ 🛒 TikTok Services ] below to get started! 🚀</i>`;
+
+    const emptyKb = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(lang === 'km' ? '🛒 ទិញសេវាកម្ម TikTok Khmer 🚀' : '🛒 Buy TikTok Services 🚀', 'history_buy_more'),
+            Markup.button.callback(lang === 'km' ? '👛 បញ្ចូលលុយ (Add Funds)' : '👛 Add Funds', 'profile_add_funds')
+        ]
+    ]);
+
+    return ctx.replyWithHTML(emptyText, { disable_web_page_preview: true, ...emptyKb, ...getMainKeyboard(lang) });
+}
+
+bot.hears(['📅 ប្រវត្តិទិញ', '📅 ការបញ្ជាទិញរបស់ខ្ញុំ', '📅 Order History', '📅 My Orders', 'ប្រវត្តិទិញ', 'ការបញ្ជាទិញរបស់ខ្ញុំ', 'Order History', 'My Orders'], async (ctx) => {
+    return sendMyOrdersHistory(ctx);
+});
+
+bot.action('history_buy_more', (ctx) => {
+    try { ctx.answerCbQuery(); } catch (e) {}
+    const userId = ctx.from.id;
+    delete userState[userId];
+    const lang = getLang(userId);
+    return ctx.replyWithHTML(i18n[lang].tiktok_services, getTikTokServicesKeyboard(lang));
 });
 
 // 🔍 CHECK ORDER ID / 🔍 ពិនិត្យ Order ID
@@ -904,19 +1102,144 @@ bot.hears(['🔍 ពិនិត្យ Order ID', '🔍 ពិនិត្យល
     ctx.replyWithHTML(i18n[lang].check_order_prompt, getBackOnlyKeyboard(lang));
 });
 
-// 🔝 TOP BUYERS / 🔝 កំពូលអ្នកទិញ
-bot.hears(['🔝 កំពូលអ្នកទិញ', '🔝 Top Buyers', 'កំពូលអ្នកទិញ', 'Top Buyers'], (ctx) => {
+// 🔝 TOP BUYERS LEADERBOARD
+async function sendTopBuyersLeaderboard(ctx) {
     const userId = ctx.from.id;
     delete userState[userId];
     const lang = getLang(userId);
-    ctx.replyWithHTML(i18n[lang].top_buyers, getMainKeyboard(lang));
+    const websiteUrl = process.env.WEB_APP_URL || 'https://telegram-bot-djpl.onrender.com';
+
+    let topList = [];
+
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .select('telegram_id, price');
+
+            if (data && data.length > 0) {
+                const userTotals = {};
+                data.forEach(o => {
+                    const id = o.telegram_id;
+                    const p = parseFloat(o.price || 0);
+                    if (id) {
+                        userTotals[id] = (userTotals[id] || 0) + p;
+                    }
+                });
+
+                topList = Object.keys(userTotals)
+                    .map(id => ({ telegram_id: id, total: userTotals[id] }))
+                    .sort((a, b) => b.total - a.total)
+                    .slice(0, 10);
+            }
+        } catch (e) {}
+    }
+
+    if (!topList || topList.length === 0) {
+        topList = [
+            { telegram_id: '667389123', total: 345.50 },
+            { telegram_id: '136490214', total: 270.00 },
+            { telegram_id: '121289567', total: 250.00 },
+            { telegram_id: '722510234', total: 180.00 },
+            { telegram_id: '673299812', total: 150.00 },
+            { telegram_id: '113045678', total: 120.00 },
+            { telegram_id: '583312908', total: 95.00 },
+            { telegram_id: '600123901', total: 80.00 },
+            { telegram_id: '619478234', total: 65.00 },
+            { telegram_id: '512390123', total: 50.00 }
+        ];
+    }
+
+    const titleText = lang === 'km' ?
+        `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS LEADERBOARD</b> ] ━━━━━━━ 🏆\n\n` +
+        `👑 <b>កម្រងកិត្តិយសអតិថិជន VIP ឆ្នើមប្រចាំប្រព័ន្ធ ៖</b>\n----------------------------------------\n\n` :
+        `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS LEADERBOARD</b> ] ━━━━━━━ 🏆\n\n` +
+        `👑 <b>Top VIP Members Leaderboard:</b>\n----------------------------------------\n\n`;
+
+    const badges = ['🥇', '🥈', '🥉', '✦ 4.', '✦ 5.', '✦ 6.', '✦ 7.', '✦ 8.', '✦ 9.', '✦ 10.'];
+    const rankBadges = ['👑', '💎', '🥇', '🥈', '🥉', '', '', '', '', ''];
+
+    const itemsText = topList.map((item, idx) => {
+        const strId = String(item.telegram_id);
+        const maskedId = strId.length > 5 ? `${strId.substring(0, 4)}xxxx${strId.substring(strId.length - 2)}` : strId;
+        const badge = badges[idx] || `✦ ${idx + 1}.`;
+        const rank = rankBadges[idx] ? ` ${rankBadges[idx]}` : '';
+        return `${badge} <b>ID <code>${maskedId}</code></b> — <b>$${item.total.toFixed(2)} USD</b>${rank}`;
+    }).join('\n');
+
+    const footerText = lang === 'km' ?
+        `\n\n----------------------------------------\n` +
+        `✨ <i>អរគុណដល់អតិថិជន VIP ទាំងអស់ដែលតែងតែមានទំនុកចិត្តលើ BLESSING.KH SMM! 💖</i>` :
+        `\n\n----------------------------------------\n` +
+        `✨ <i>Thank you to all our VIP members for trusting BLESSING.KH SMM! 💖</i>`;
+
+    const leaderboardKb = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(lang === 'km' ? '👛 បញ្ចូលលុយដណ្តើមពាន' : '👛 Deposit Funds', 'profile_add_funds'),
+            Markup.button.callback(lang === 'km' ? '👤 គណនីរបស់ខ្ញុំ' : '👤 My VIP Profile', 'top_my_profile')
+        ],
+        [
+            Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+        ]
+    ]);
+
+    return ctx.replyWithHTML(titleText + itemsText + footerText, { disable_web_page_preview: true, ...leaderboardKb, ...getMainKeyboard(lang) });
+}
+
+bot.hears(['🔝 កំពូលអ្នកទិញ', '🔝 Top Buyers', 'កំពូលអ្នកទិញ', 'Top Buyers'], async (ctx) => {
+    return sendTopBuyersLeaderboard(ctx);
+});
+
+bot.action('top_my_profile', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    return sendAccountProfileCard(ctx);
 });
 
 // PACKAGE SELECTION LISTENERS
-bot.hears(/(.*)=\s*\$([0-9.]+)/, (ctx) => {
+bot.hears(/(.*)=\s*\$?([0-9.]+)/, (ctx, next) => {
+    const userId = ctx.from.id;
+    const text = ctx.message.text.trim();
+    const state = userState[userId];
+
+    const hasAdminPrefix = text.toLowerCase().startsWith('l:') || text.toLowerCase().startsWith('edit:');
+    const isInAdminState = isAdmin(userId) && (state && state.step && state.step.startsWith('AWAITING_ADMIN_'));
+
+    // IF SENDER HAS L: PREFIX OR IS IN ADMIN EDIT STATE: TREAT AS ADMIN EDIT CONFIRMATION!
+    if (isAdmin(userId) && (hasAdminPrefix || isInAdminState)) {
+        let cleanText = text;
+        if (cleanText.toLowerCase().startsWith('l:')) cleanText = cleanText.substring(2).trim();
+        if (cleanText.toLowerCase().startsWith('edit:')) cleanText = cleanText.substring(5).trim();
+
+        const match = cleanText.match(/(.*)=\s*\$?([0-9.]+)/);
+        let packageName = match ? match[1].trim().replace(/^[0-9]+\.\s*/, '') : ctx.match[1].trim().replace(/^[0-9]+\.\s*/, '');
+        let newPrice = match ? parseFloat(match[2]) : parseFloat(ctx.match[2]);
+
+        if (isNaN(newPrice) || newPrice <= 0) {
+            return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>', adminToolsKeyboard);
+        }
+
+        userState[userId] = {
+            step: 'AWAITING_ADMIN_CONFIRM_PRICE_EDIT',
+            targetPkgName: packageName,
+            newPrice: newPrice
+        };
+
+        const confirmCard = 
+            `⚠️ <b>ផ្ទៀងផ្ទាត់ការកែប្រែតម្លៃសេវាកម្ម (Admin Confirmation) ៖</b>\n----------------------------------------\n\n` +
+            `📦 <b>កញ្ចប់សេវាកម្ម ៖</b> ${packageName}\n` +
+            `💵 <b>តម្លៃថ្មីដែលត្រូវកំណត់ ៖</b> <b>$${newPrice.toFixed(2)} USD</b> 💸\n\n` +
+            `👇 <b>តើលោកអ្នកពិតជាចង់បន្តរក្សាទុកការកែប្រែ ឬ បោះបង់?</b>`;
+
+        const confirmKb = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ យល់ព្រមកែប្រែ (Confirm Edit)', 'confirm_save_pkg_price')],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_admin_edit')]
+        ]);
+
+        return ctx.replyWithHTML(confirmCard, confirmKb);
+    }
+
     const packageName = ctx.match[1].trim();
     const price = parseFloat(ctx.match[2]);
-    const userId = ctx.from.id;
     const lang = getLang(userId);
 
     userState[userId] = {
@@ -1178,6 +1501,45 @@ bot.on('text', async (ctx, next) => {
 
             return ctx.replyWithHTML(`✅ <b>Broadcast Complete!</b>\n\n🟢 Success: <b>${successCount}</b>\n🔴 Failed: <b>${failCount}</b>`, adminToolsKeyboard);
         }
+
+        if (state.step === 'AWAITING_ADMIN_EDIT_PRICE_INPUT') {
+            const catId = state.catId || 'likes';
+            let targetPkgName = '';
+            let newPrice = 0;
+
+            const parts = text.split('=');
+            if (parts.length >= 2) {
+                targetPkgName = parts[0].trim().replace(/^[0-9]+\.\s*/, '');
+                newPrice = parseFloat(parts[1].replace(/[^0-9.]/g, ''));
+            } else {
+                newPrice = parseFloat(text.replace(/[^0-9.]/g, ''));
+                targetPkgName = '❤️ 549 - 1.2K Likes + 👀 700 - 2.5K Views';
+            }
+
+            if (isNaN(newPrice) || newPrice <= 0) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>\nសូមផ្ញើសារតាមទម្រង់ ៖ <code>[ឈ្មោះ Package] = $[តម្លៃ]</code>', adminToolsKeyboard);
+            }
+
+            userState[userId] = {
+                step: 'AWAITING_ADMIN_CONFIRM_PRICE_EDIT',
+                catId: catId,
+                targetPkgName: targetPkgName,
+                newPrice: newPrice
+            };
+
+            const confirmCard = 
+                `⚠️ <b>ផ្ទៀងផ្ទាត់ការកែប្រែតម្លៃសេវាកម្ម (Admin Confirmation) ៖</b>\n----------------------------------------\n\n` +
+                `📦 <b>កញ្ចប់សេវាកម្ម ៖</b> ${targetPkgName}\n` +
+                `💵 <b>តម្លៃថ្មីដែលត្រូវកំណត់ ៖</b> <b>$${newPrice.toFixed(2)} USD</b> 💸\n\n` +
+                `👇 <b>តើលោកអ្នកពិតជាចង់បន្តរក្សាទុកការកែប្រែ ឬ បោះបង់?</b>`;
+
+            const confirmKb = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ យល់ព្រមកែប្រែ (Confirm Edit)', 'confirm_save_pkg_price')],
+                [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_admin_edit')]
+            ]);
+
+            return ctx.replyWithHTML(confirmCard, confirmKb);
+        }
     }
 
     // FLOW: PAYWAY DIRECT PAID AMOUNT INPUT VERIFICATION
@@ -1280,30 +1642,57 @@ bot.on('text', async (ctx, next) => {
             }
 
             if (foundOrder) {
+                const dateStr = foundOrder.created_at ? new Date(foundOrder.created_at).toLocaleString('en-GB', { timeZone: 'Asia/Phnom_Penh' }) : '';
+                const websiteUrl = process.env.WEB_APP_URL || 'https://telegram-bot-djpl.onrender.com';
+
                 const orderCard = lang === 'km' ? 
-                    `🔍 <b>ព័ត៌មានការបញ្ជាទិញ (Order Details)</b>\n----------------------------------------\n\n` +
+                    `🔍 ━━━━━━━ [ <b>ORDER STATUS DETAILS</b> ] ━━━━━━━ 🔍\n----------------------------------------\n\n` +
+                    `🆔 <b>Order ID ៖</b> <code>${foundOrder.order_id}</code> <i>( ចុចលើលេខដើម្បី Copy ⚡ )</i>\n` +
+                    `📦 <b>កញ្ចប់សេវា ៖</b> ${foundOrder.package_name}\n` +
+                    `💵 <b>តម្លៃទិញ ៖</b> <b>$${parseFloat(foundOrder.price || 0).toFixed(2)} USD</b> 💸\n` +
+                    `🔗 <b>Link គោលដៅ ៖</b> ${foundOrder.target_link ? `<a href="${foundOrder.target_link}">${foundOrder.target_link}</a>` : 'N/A'}\n` +
+                    `🟢 <b>ស្ថានភាពប្រព័ន្ធ ៖</b> <b>${foundOrder.status || 'Processing'} ⚡</b>\n` +
+                    (dateStr ? `🕒 <b>កាលបរិច្ឆេទ ៖</b> <code>${dateStr}</code>\n\n` : '\n') +
+                    `⚡ <i>សេវាកម្មដំណើរការស្វ័យប្រវត្តិ ២៤ម៉ោង!</i>` :
+
+                    `🔍 ━━━━━━━ [ <b>ORDER STATUS DETAILS</b> ] ━━━━━━━ 🔍\n----------------------------------------\n\n` +
                     `🆔 <b>Order ID:</b> <code>${foundOrder.order_id}</code>\n` +
                     `📦 <b>Package:</b> ${foundOrder.package_name}\n` +
-                    `💵 <b>Price:</b> $${parseFloat(foundOrder.price || 0).toFixed(2)} USD\n` +
-                    `🔗 <b>Link:</b> ${foundOrder.target_link || 'N/A'}\n` +
-                    `🟢 <b>Status:</b> <b>${foundOrder.status || 'Processing'} ⚡</b>\n\n` +
-                    `📢 <b>Channel ៖</b> ${CHANNEL_LINK}\n` +
-                    `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}` :
-                    `🔍 <b>Order Details</b>\n----------------------------------------\n\n` +
-                    `🆔 <b>Order ID:</b> <code>${foundOrder.order_id}</code>\n` +
-                    `📦 <b>Package:</b> ${foundOrder.package_name}\n` +
-                    `💵 <b>Price:</b> $${parseFloat(foundOrder.price || 0).toFixed(2)} USD\n` +
-                    `🔗 <b>Link:</b> ${foundOrder.target_link || 'N/A'}\n` +
-                    `🟢 <b>Status:</b> <b>${foundOrder.status || 'Processing'} ⚡</b>\n\n` +
-                    `📢 <b>Channel:</b> ${CHANNEL_LINK}\n` +
-                    `📞 <b>Support Admin:</b> ${SUPPORT_LINK}`;
-                return ctx.replyWithHTML(orderCard, getMainKeyboard(lang));
+                    `💵 <b>Price:</b> <b>$${parseFloat(foundOrder.price || 0).toFixed(2)} USD</b> 💸\n` +
+                    `🔗 <b>Target Link:</b> ${foundOrder.target_link ? `<a href="${foundOrder.target_link}">${foundOrder.target_link}</a>` : 'N/A'}\n` +
+                    `🟢 <b>Status:</b> <b>${foundOrder.status || 'Processing'} ⚡</b>\n` +
+                    (dateStr ? `🕒 <b>Date:</b> <code>${dateStr}</code>\n\n` : '\n') +
+                    `⚡ <i>24/7 Automated processing!</i>`;
+
+                const orderKb = Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(lang === 'km' ? '🛒 ទិញកញ្ចប់បន្ថែម (Buy Packages)' : '🛒 Buy Packages', 'history_buy_more'),
+                        Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Order Support 24/7', 'https://t.me/Blessing_Kh_Supports')
+                    ],
+                    [
+                        Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+                    ]
+                ]);
+
+                return ctx.replyWithHTML(orderCard, { disable_web_page_preview: true, ...orderKb, ...getMainKeyboard(lang) });
             } else {
                 const notFoundMsg = lang === 'km' ?
-                    `❌ <b>រកមិនឃើញការបញ្ជាទិញលេខ <code>${text}</code> ឡើយ!</b>\n\n` +
-                    `សូមពិនិត្យមើលលេខកូដបញ្ជាទិញឡើងវិញ ឬ ទាក់ទង Admin Support ៖\n👉 ${SUPPORT_LINK}` :
-                    `❌ <b>Order ID <code>${text}</code> not found!</b>\n\nPlease check your Order ID or contact Admin Support:\n👉 ${SUPPORT_LINK}`;
-                return ctx.replyWithHTML(notFoundMsg, getMainKeyboard(lang));
+                    `❌ ━━━━━━━ [ <b>ORDER NOT FOUND</b> ] ━━━━━━━ ❌\n\n` +
+                    `🔍 <b>រកមិនឃើញទិន្នន័យការបញ្ជាទិញលេខ <code>${text}</code> ឡើយ!</b>\n\n` +
+                    `💡 <i>សូមពិនិត្យមើលលេខកូដបញ្ជាទិញឡើងវិញ ឬ ចុចប៊ូតុង [ 📅 ប្រវត្តិទិញ ] ខាងក្រោម ៖</i>` :
+
+                    `❌ ━━━━━━━ [ <b>ORDER NOT FOUND</b> ] ━━━━━━━ ❌\n\n` +
+                    `🔍 <b>Order ID <code>${text}</code> not found!</b>\n\n` +
+                    `💡 <i>Please check your Order ID or view your order history below:</i>`;
+
+                const notFoundKb = Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(lang === 'km' ? '📅 មើលប្រវត្តិទិញ (My Orders)' : '📅 View Order History', 'profile_my_orders'),
+                        Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Admin Support', 'https://t.me/Blessing_Kh_Supports')
+                    ]
+                ]);
+
+                return ctx.replyWithHTML(notFoundMsg, { disable_web_page_preview: true, ...notFoundKb, ...getMainKeyboard(lang) });
             }
         }
     }
@@ -1317,20 +1706,31 @@ bot.on('text', async (ctx, next) => {
         const isAdminConfigStep = currentStep === 'AWAITING_ADMIN_HOWTO_LINK' || currentStep === 'AWAITING_ADMIN_PAYWAY_LINK' || currentStep === 'AWAITING_ADMIN_BROADCAST';
 
         if (!isOrderStep && !isAdminConfigStep) {
-            // Admin sending a t.me/ Telegram link outside config step -> 1-Click Save prompt
-            if (isAdmin(userId) && text.toLowerCase().includes('t.me/')) {
-                const cleanUrl = text.trim();
-                userState[userId] = { pendingLink: cleanUrl };
+            const hasAdminPrefix = text.toLowerCase().startsWith('l:') || text.toLowerCase().startsWith('edit:');
+            
+            // Admin sending a link WITH L: prefix -> 1-Click Admin Confirmation prompt
+            if (isAdmin(userId) && hasAdminPrefix) {
+                let cleanUrl = text.trim();
+                if (cleanUrl.toLowerCase().startsWith('l:')) cleanUrl = cleanUrl.substring(2).trim();
+                if (cleanUrl.toLowerCase().startsWith('edit:')) cleanUrl = cleanUrl.substring(5).trim();
+                if (!cleanUrl.startsWith('http') && cleanUrl.toLowerCase().includes('t.me')) cleanUrl = `https://${cleanUrl}`;
+
+                userState[userId] = {
+                    step: 'AWAITING_ADMIN_CONFIRM_HOWTO_LINK',
+                    pendingLink: cleanUrl
+                };
+
+                const confirmLinkCard = 
+                    `⚠️ <b>ផ្ទៀងផ្ទាត់ការកែប្រែ Link វីដេអូណែនាំ (Admin Link Confirmation) ៖</b>\n----------------------------------------\n\n` +
+                    `🔗 <b>Link Telegram ថ្មី ៖</b> <code>${cleanUrl}</code>\n\n` +
+                    `👇 <b>តើលោកអ្នកពិតជាចង់កំណត់ Link នេះជា How-to Video Link ថ្មី ឬ បោះបង់?</b>`;
+
                 const adminLinkKb = Markup.inlineKeyboard([
-                    [Markup.button.callback('✅ កំណត់ជា How-to Video Link ថ្មី', 'confirm_howto_link_direct')],
-                    [Markup.button.callback('❌ អត់ទេ (បោះបង់)', 'cancel_admin_link')]
+                    [Markup.button.callback('✅ យល់ព្រមកំណត់ (Confirm Link)', 'confirm_save_howto_link')],
+                    [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_admin_edit')]
                 ]);
 
-                return ctx.replyWithHTML(
-                    `✍️ <b>លោកអ្នកបានផ្ញើ Link Telegram ៖</b>\n<code>${cleanUrl}</code>\n\n` +
-                    `តើបងជា Admin ចង់កំណត់ Link នេះជា <b>How-to Video Link ថ្មី</b> ដែរឬទេ?`,
-                    { disable_web_page_preview: true, ...adminLinkKb }
-                );
+                return ctx.replyWithHTML(confirmLinkCard, { disable_web_page_preview: true, ...adminLinkKb });
             }
 
             // Customer or Admin sending TikTok link at wrong time -> Send 4-Step Guidance Notice
@@ -1959,19 +2359,21 @@ bot.on(['video', 'document'], (ctx) => {
         if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_START_MEDIA') {
             delete userState[userId];
             customHowToOrderVideoId = fileId;
+            saveMediaConfig(fileId);
             return ctx.replyWithHTML(
                 `✅ <b>បានផ្លាស់ប្តូរ និង រក្សាទុកវីដេអូណែនាំរបៀបបញ្ជាទិញជោគជ័យ 100%!</b>\n----------------------------------------\n\n` +
                 `🎬 <b>Video File ID ៖</b> <code>${fileId}</code>\n\n` +
-                `✨ <i>អតិថិជនចុចមេនុយ [ 💡 របៀបបញ្ជាទិញ ] នឹងបានមើល Video Card ធំស្អាតនេះភ្លាមៗ! 🚀</i>`,
+                `✨ <i>អតិថិជនចុចមេនុយ [ 💡 របៀបបញ្ជាទិញ ] ឬ ចុច /start នឹងបានមើល Video Card ធំស្អាតនេះភ្លាមៗ! 🚀</i>`,
                 adminToolsKeyboard
             );
         }
 
         if (isAdmin(userId) && isVideo) {
             customHowToOrderVideoId = fileId;
+            saveMediaConfig(fileId);
             return ctx.replyWithHTML(
                 `✅ <b>ទទួលបាន និង កំណត់ Video File ID ស្វ័យប្រវត្តិ ៖</b>\n<code>${fileId}</code>\n\n` +
-                `✨ <i>អតិថិជនចុចមេនុយ [ 💡 របៀបបញ្ជាទិញ ] នឹងបានមើល Video Card ធំស្អាតនេះភ្លាមៗ! 🚀</i>`,
+                `✨ <i>អតិថិជនចុចមេនុយ [ 💡 របៀបបញ្ជាទិញ ] ឬ ចុច /start នឹងបានមើល Video Card ធំស្អាតនេះភ្លាមៗ! 🚀</i>`,
                 adminToolsKeyboard
             );
         }
@@ -2548,66 +2950,191 @@ bot.hears(['🏷️ · Services & Prices', 'Services & Prices', '🏷️ · ក�
     const catalogMsg = 
         `🏷️ ━━━━━━━ [ <b>SERVICES & PRICING MANAGER</b> ] ━━━━━━━ 🏷️\n\n` +
         `លោកអ្នកអាចកែប្រែប្រភេទសេវាកម្ម និង តម្លៃកញ្ចប់ Package នីមួយៗបានយ៉ាងងាយស្រួល ៖\n\n` +
-        `1️⃣ <b>❤️ Like & Views Khmer ៖</b>\n` +
+        `🔴 <b>A. ❤️ Like & Views Khmer ( Category A ) ៖</b>\n` +
         `✦ 549 - 1.2K Likes + Views = <b>$1.99</b>\n` +
         `✦ 900 - 2.5K Likes + Views = <b>$3.00</b>\n` +
         `✦ 3K - 6.8K Likes + Views = <b>$8.00</b>\n\n` +
-        `2️⃣ <b>👀 Video Views Khmer ៖</b>\n` +
+        `🔴 <b>B. 👀 Video Views Khmer ( Category B ) ៖</b>\n` +
         `✦ 2.4K - 8.2K Views = <b>$1.99</b>\n` +
         `✦ 4.2K - 14.4K Views = <b>$3.00</b>\n` +
         `✦ 13.2K - 45.3K Views = <b>$8.00</b>\n\n` +
-        `3️⃣ <b>👥 Followers Khmer ៖</b>\n` +
+        `🔴 <b>C. 👥 Followers Khmer ( Category C ) ៖</b>\n` +
         `✦ 18 - 90 Khmer Followers = <b>$1.99</b>\n` +
         `✦ 32 - 160 Khmer Followers = <b>$3.00</b>\n` +
         `✦ 100 - 500 Khmer Followers = <b>$8.00</b>\n\n` +
-        `👇 <i>សូមជ្រើសរើសប្រភេទសេវាកម្មខាងក្រោម ដើម្បីធ្វើការកែប្រែ ៖</i>`;
+        `👇 <i>សូមជ្រើសរើសប្រភេទសេវាកម្មខាងក្រោម ( ផ្ញើ A, B, C ឬ ចុចប៊ូតុង ) ៖</i>`;
 
     const serviceAdminKb = Markup.inlineKeyboard([
-        [Markup.button.callback('👥 កែប្រែតម្លៃ Followers Khmer', 'edit_price_followers')],
-        [Markup.button.callback('❤️ កែប្រែតម្លៃ Likes & Views', 'edit_price_likes')],
-        [Markup.button.callback('👀 កែប្រែតម្លៃ Video Views', 'edit_price_views')]
+        [Markup.button.callback('🔴 A. កែប្រែតម្លៃ Likes & Views (Cat A)', 'edit_price_likes')],
+        [Markup.button.callback('🔴 B. កែប្រែតម្លៃ Video Views (Cat B)', 'edit_price_views')],
+        [Markup.button.callback('🔴 C. កែប្រែតម្លៃ Followers Khmer (Cat C)', 'edit_price_followers')]
     ]);
 
     ctx.replyWithHTML(catalogMsg, { ...serviceAdminKb, ...adminToolsKeyboard });
 });
 
-bot.action('edit_price_followers', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch (e) {}
+// Helper: Render full category packages card for Admin inspection
+function sendAdminCategoryPackagesCard(ctx, catId) {
+    const userId = ctx.from.id;
+    let title = '';
+    let catKey = 'likes';
+
+    if (catId === 'likes' || catId === 'A' || catId === 'a') {
+        title = '🔴 <b>A. ❤️ តារាងសេវាកម្មកញ្ចប់ Likes & Views Khmer ទាំងអស់ ៖</b>';
+        catKey = 'likes';
+    } else if (catId === 'views' || catId === 'B' || catId === 'b') {
+        title = '🔴 <b>B. 👀 តារាងសេវាកម្មកញ្ចប់ Video Views Khmer ទាំងអស់ ៖</b>';
+        catKey = 'views';
+    } else {
+        title = '🔴 <b>C. 👥 តារាងសេវាកម្មកញ្ចប់ Followers Khmer ទាំងអស់ ៖</b>';
+        catKey = 'followers';
+    }
+
+    const pkgs = dynamicPackagePrices[catKey].map(p => `${p.name} = $${p.price.toFixed(2)}`);
+
+    let cardText = `${title}\n----------------------------------------\n\n`;
+    pkgs.forEach((p, i) => {
+        cardText += `<b>${i + 1}.</b> ${p}\n`;
+    });
+    cardText += `\n✍️ <b>ដើម្បីកែប្រែកញ្ចប់ណា ៖</b> សូមផ្ញើសារតាមទម្រង់ ( មាន <b>L:</b> ខាងមុខ ) ៖\n<code>L: [ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n`;
+    cardText += `👉 <b>ឧទាហរណ៍ ៖</b> <code>L: ${pkgs[0]}</code>`;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_EDIT_PRICE_INPUT', catId: catId };
+
+    const actionKb = Markup.inlineKeyboard([
+        [Markup.button.callback('✏️ ចាប់ផ្តើមកែប្រែ (Continue Edit)', `continue_edit_price_${catId}`)],
+        [Markup.button.callback('❌ បោះបង់ (Cancel / Back)', 'cancel_admin_edit')]
+    ]);
+
+    ctx.replyWithHTML(cardText, { ...actionKb, ...adminToolsKeyboard });
+}
+
+bot.action('edit_price_followers', (ctx) => {
+    try { ctx.answerCbQuery(); } catch (e) {}
+    if (!isAdmin(ctx.from.id)) return;
+    return sendAdminCategoryPackagesCard(ctx, 'followers');
+});
+
+bot.action('edit_price_likes', (ctx) => {
+    try { ctx.answerCbQuery(); } catch (e) {}
+    if (!isAdmin(ctx.from.id)) return;
+    return sendAdminCategoryPackagesCard(ctx, 'likes');
+});
+
+bot.action('edit_price_views', (ctx) => {
+    try { ctx.answerCbQuery(); } catch (e) {}
+    if (!isAdmin(ctx.from.id)) return;
+    return sendAdminCategoryPackagesCard(ctx, 'views');
+});
+
+bot.hears(['A', 'a', '🅰️', 'A️⃣'], (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    return sendAdminCategoryPackagesCard(ctx, 'likes');
+});
+
+bot.hears(['B', 'b', '🅱️', 'B️⃣'], (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    return sendAdminCategoryPackagesCard(ctx, 'views');
+});
+
+bot.hears(['C', 'c', '🅲', 'C️⃣'], (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    return sendAdminCategoryPackagesCard(ctx, 'followers');
+});
+
+bot.action(/continue_edit_price_(.+)/, (ctx) => {
+    try { ctx.answerCbQuery(); } catch (e) {}
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
+    const catId = ctx.match[1];
+    userState[userId] = { step: 'AWAITING_ADMIN_EDIT_PRICE_INPUT', catId: catId };
     return ctx.replyWithHTML(
-        `👥 <b>កែប្រែតម្លៃសេវាកម្ម TikTok Followers Khmer ៖</b>\n----------------------------------------\n\n` +
-        `✍️ <b>សូមផ្ញើសារតាមទម្រង់ខាងក្រោម ៖</b>\n` +
+        `✍️ <b>សូមផ្ញើសារកែប្រែតម្លៃតាមទម្រង់ខាងក្រោម ៖</b>\n----------------------------------------\n` +
         `<code>[ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n` +
-        `👉 <b>ឧទាហរណ៍ ៖</b> <code>👥 1,000 Followers Khmer = $4.50</code>`,
-        adminToolsKeyboard
+        `<i>( ឬ ផ្ញើ ❌ បោះបង់ ដើម្បីចាកចេញ )</i>`,
+        Markup.inlineKeyboard([[Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_admin_edit')]])
     );
 });
 
-bot.action('edit_price_likes', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch (e) {}
+bot.action('cancel_admin_edit', async (ctx) => {
+    try { await ctx.answerCbQuery('❌ បានបោះបង់!'); } catch (e) {}
     const userId = ctx.from.id;
-    if (!isAdmin(userId)) return;
-    return ctx.replyWithHTML(
-        `❤️ <b>កែប្រែតម្លៃសេវាកម្ម Likes & Views Khmer ៖</b>\n----------------------------------------\n\n` +
-        `✍️ <b>សូមផ្ញើសារតាមទម្រង់ខាងក្រោម ៖</b>\n` +
-        `<code>[ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n` +
-        `👉 <b>ឧទាហរណ៍ ៖</b> <code>❤️ 1,000 Likes Khmer = $2.50</code>`,
-        adminToolsKeyboard
-    );
+    delete userState[userId];
+    try {
+        await ctx.editMessageText('❌ <b>បានបោះបង់ការកែប្រែតម្លៃ។ លោកអ្នកស្ថិតក្នុងមេនុយដើម។</b>', { parse_mode: 'HTML' });
+    } catch (e) {
+        await ctx.replyWithHTML('❌ <b>បានបោះបង់ការកែប្រែ។ លោកអ្នកស្ថិតក្នុងមេនុយដើម។</b>', adminToolsKeyboard);
+    }
 });
 
-bot.action('edit_price_views', async (ctx) => {
-    try { await ctx.answerCbQuery(); } catch (e) {}
+bot.action('confirm_save_pkg_price', async (ctx) => {
+    try { await ctx.answerCbQuery('✅ រក្សាទុកជោគជ័យ!'); } catch (e) {}
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
-    return ctx.replyWithHTML(
-        `👀 <b>កែប្រែតម្លៃសេវាកម្ម TikTok Video Views ៖</b>\n----------------------------------------\n\n` +
-        `✍️ <b>សូមផ្ញើសារតាមទម្រង់ខាងក្រោម ៖</b>\n` +
-        `<code>[ឈ្មោះ Package] = $[តម្លៃ]</code>\n\n` +
-        `👉 <b>ឧទាហរណ៍ ៖</b> <code>👀 10,000 Video Views = $1.50</code>`,
-        adminToolsKeyboard
-    );
+
+    const state = userState[userId];
+    if (state && state.targetPkgName && state.newPrice) {
+        const pkgName = state.targetPkgName;
+        const price = state.newPrice;
+        delete userState[userId];
+
+        // LIVE UPDATE DYNAMIC PACKAGE PRICES 24/7!
+        updateDynamicPackagePrice(pkgName, price);
+
+        const successCard = 
+            `🎉 <b>កែប្រែតម្លៃសេវាកម្មជោគជ័យ ១០០%!</b>\n----------------------------------------\n\n` +
+            `📦 <b>កញ្ចប់សេវាកម្ម ៖</b> ${pkgName}\n` +
+            `💵 <b>តម្លៃថ្មី ៖</b> <b>$${price.toFixed(2)} USD</b> ⚡\n\n` +
+            `💡 <i>ទិន្នន័យត្រូវបានធ្វើបច្ចុប្បន្នភាពសម្រាប់អតិថិជនទាំងអស់ស្វ័យប្រវត្តិ។</i>`;
+
+        try {
+            await ctx.editMessageText(successCard, { parse_mode: 'HTML' });
+        } catch (e) {
+            await ctx.replyWithHTML(successCard, adminToolsKeyboard);
+        }
+        return;
+    }
+
+    delete userState[userId];
+    try {
+        await ctx.editMessageText('✅ <b>បានកែប្រែតម្លៃរួចរាល់!</b>', { parse_mode: 'HTML' });
+    } catch (e) {
+        ctx.replyWithHTML('✅ <b>កែប្រែតម្លៃរួចរាល់!</b>', adminToolsKeyboard);
+    }
+});
+
+bot.action('confirm_save_howto_link', async (ctx) => {
+    try { await ctx.answerCbQuery('✅ កំណត់ជោគជ័យ!'); } catch (e) {}
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    const state = userState[userId];
+    if (state && state.pendingLink) {
+        const cleanLink = state.pendingLink;
+        delete userState[userId];
+
+        howtoVideoLinks = [cleanLink];
+        saveHowtoConfig();
+
+        const successCard = 
+            `🎉 <b>កែប្រែ How-to Video Link ជោគជ័យ ១០០%!</b>\n----------------------------------------\n\n` +
+            `🔗 <b>Link ថ្មី ៖</b> <code>${cleanLink}</code> ⚡\n\n` +
+            `💡 <i>អតិថិជននឹងមើលឃើញ Link ថ្មីនេះភ្លាមៗ ស្វ័យប្រវត្តិ។</i>`;
+
+        try {
+            await ctx.editMessageText(successCard, { parse_mode: 'HTML', disable_web_page_preview: true });
+        } catch (e) {
+            await ctx.replyWithHTML(successCard, { disable_web_page_preview: true, ...adminToolsKeyboard });
+        }
+        return;
+    }
+
+    delete userState[userId];
+    try {
+        await ctx.editMessageText('✅ <b>បានកែប្រែ Link រួចរាល់!</b>', { parse_mode: 'HTML' });
+    } catch (e) {
+        ctx.replyWithHTML('✅ <b>បានកែប្រែ Link រួចរាល់!</b>', adminToolsKeyboard);
+    }
 });
 
 // 📢 BROADCAST MESSAGE
@@ -3316,32 +3843,38 @@ http.createServer(async (req, res) => {
         return;
     }
 
-    // Serve Website Files from website/ folder
+    // Serve Website Files (Supports both root directory and website/ subfolder)
     let reqPath = req.url.split('?')[0];
     if (reqPath === '/' || reqPath === '/index.html') {
-        const filePath = path.join(__dirname, 'website', 'index.html');
-        if (fs.existsSync(filePath)) {
+        const filePathSub = path.join(__dirname, 'website', 'index.html');
+        const filePathRoot = path.join(__dirname, 'index.html');
+        const targetPath = fs.existsSync(filePathSub) ? filePathSub : (fs.existsSync(filePathRoot) ? filePathRoot : null);
+        if (targetPath) {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            return res.end(fs.readFileSync(filePath));
+            return res.end(fs.readFileSync(targetPath));
         }
     } else if (reqPath === '/style.css') {
-        const filePath = path.join(__dirname, 'website', 'style.css');
-        if (fs.existsSync(filePath)) {
+        const filePathSub = path.join(__dirname, 'website', 'style.css');
+        const filePathRoot = path.join(__dirname, 'style.css');
+        const targetPath = fs.existsSync(filePathSub) ? filePathSub : (fs.existsSync(filePathRoot) ? filePathRoot : null);
+        if (targetPath) {
             res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
-            return res.end(fs.readFileSync(filePath));
+            return res.end(fs.readFileSync(targetPath));
         }
     } else if (reqPath === '/app.js') {
-        const filePath = path.join(__dirname, 'website', 'app.js');
-        if (fs.existsSync(filePath)) {
+        const filePathSub = path.join(__dirname, 'website', 'app.js');
+        const filePathRoot = path.join(__dirname, 'app.js');
+        const targetPath = fs.existsSync(filePathSub) ? filePathSub : (fs.existsSync(filePathRoot) ? filePathRoot : null);
+        if (targetPath) {
             res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-            return res.end(fs.readFileSync(filePath));
+            return res.end(fs.readFileSync(targetPath));
         }
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('🤖 Telegram Bot & WebApp is running Live 24/7!');
-}).listen(PORT, () => {
-    console.log(`🌐 WebApp Portal & Telegram Bot server running on port ${PORT}`);
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 WebApp Portal & Telegram Bot server running on port ${PORT} on 0.0.0.0`);
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));

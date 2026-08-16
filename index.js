@@ -2163,7 +2163,7 @@ bot.action('cancel_admin_link', async (ctx) => {
 
 // Helper function to gather all unique Telegram user IDs across DB and memory
 async function getAllBroadcastUsers() {
-    let idsSet = new Set(ALLOWED_ADMIN_IDS.map(id => String(id)));
+    let idsSet = new Set(Array.from(registeredAdminIds).map(id => String(id)));
 
     Object.keys(userBalances).forEach(id => idsSet.add(String(id)));
     Object.keys(userState).forEach(id => idsSet.add(String(id)));
@@ -2556,17 +2556,19 @@ let howtoVideoLinks = [
 ];
 
 // Authorized Admin Telegram IDs (Strict Security: Only 521984577 & 8759289483)
-const ALLOWED_ADMIN_IDS = [521984577, 8759289483];
+// Default admin IDs used only when ADMIN_IDS is not set in .env — set ADMIN_IDS
+// to take full, exclusive control of who has admin access.
+const DEFAULT_ADMIN_IDS = [521984577, 8759289483];
 const registeredAdminIds = new Set(
     process.env.ADMIN_IDS
         ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
-        : ALLOWED_ADMIN_IDS
+        : DEFAULT_ADMIN_IDS
 );
 
 function isAdmin(userId) {
     if (!userId) return false;
     const numericId = parseInt(userId);
-    return registeredAdminIds.has(numericId) || ALLOWED_ADMIN_IDS.includes(numericId);
+    return registeredAdminIds.has(numericId);
 }
 
 // Dynamic Admin Keyboards Generator

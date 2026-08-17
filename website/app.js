@@ -328,18 +328,17 @@ async function generateRealDeposit(amount) {
 
         const card = document.getElementById('qrCard');
         const label = document.getElementById('qrAmountLabel');
-        const canvas = document.getElementById('qrCanvas');
+        const qrImg = document.getElementById('qrImage');
         const statusText = document.getElementById('qrStatusText');
 
         label.textContent = `$${dep.amount.toFixed(2)} USD`;
         statusText.textContent = '⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...';
         card.classList.remove('hidden');
 
-        if (window.QRCode) {
-            QRCode.toCanvas(canvas, dep.qrString, { width: 220, margin: 1 }, (err) => {
-                if (err) console.error(err);
-            });
-        }
+        // Server-generated QR image (same api.qrserver.com approach the Telegram
+        // bot itself uses) — avoids relying on a third-party client-side JS
+        // library that tracking-prevention browsers/extensions silently block.
+        qrImg.src = dep.qrImageUrl;
 
         appState.activeDepositId = dep.depositId;
         const balanceBeforePay = appState.me.balance;

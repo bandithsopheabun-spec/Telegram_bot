@@ -11,8 +11,10 @@
     <!-- Telegram WebApp SDK (used only if opened from inside Telegram; the site
          also works standalone via the Telegram Login Widget, injected by app.js) -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- QRCode Generator Library -->
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <!-- KHQR is rendered as a server-generated <img> (qrImageUrl from POST /api/deposits),
+         not a client-side QR library — browsers with tracking-prevention enabled
+         (Edge, Firefox strict, many ad-blockers) silently block third-party CDN
+         scripts like qrcode.js, leaving the canvas blank. -->
 </head>
 <body>
     <!-- LOGIN GATE — shown until a verified Telegram session exists -->
@@ -188,7 +190,7 @@
                     <div class="qr-display-card hidden" id="qrCard">
                         <div class="khqr-badge">Bakong KHQR</div>
                         <div class="qr-canvas-wrapper">
-                            <canvas id="qrCanvas"></canvas>
+                            <img id="qrImage" alt="Bakong KHQR Code" style="width: 220px; height: 220px; display: block;">
                         </div>
                         <div class="qr-amount-label" id="qrAmountLabel">$1.99 USD</div>
                         <p class="qr-timer" id="qrStatusText">⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...</p>

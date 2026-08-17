@@ -4243,6 +4243,15 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
             return res.end(fs.readFileSync(targetPath));
         }
+    } else if (reqPath === '/about' || reqPath === '/about.html') {
+        // Standalone business landing page (About/Services/Contact/Terms/Privacy/Refund)
+        // — used for bank/payment-provider API applications (e.g. ACLEDA), not linked
+        // from the customer-facing bot/WebApp.
+        const aboutPath = path.join(__dirname, 'business-site', 'about.html');
+        if (fs.existsSync(aboutPath)) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            return res.end(fs.readFileSync(aboutPath));
+        }
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });

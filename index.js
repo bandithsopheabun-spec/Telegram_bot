@@ -4105,8 +4105,18 @@ http.createServer(async (req, res) => {
     console.log(`🌐 WebApp Portal & Telegram Bot server running on port ${PORT} on 0.0.0.0`);
 });
 
-process.once('SIGINT', () => { isShuttingDown = true; bot.stop('SIGINT'); process.exit(0); });
-process.once('SIGTERM', () => { isShuttingDown = true; bot.stop('SIGTERM'); process.exit(0); });
+// bot.stop() throws ("Bot is not running!") if launchBot() hasn't successfully
+// started polling yet (e.g. still retrying after a 409 Conflict) — without a
+// try/catch that throw would abort this handler before process.exit(0) runs,
+// so Render would see a crash instead of a clean shutdown and restart the old
+// container, which then keeps conflicting with the new one indefinitely.
+function shutdown(signal) {
+    isShuttingDown = true;
+    try { bot.stop(signal); } catch (e) {}
+    process.exit(0);
+}
+process.once('SIGINT', () => shutdown('SIGINT'));
+process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 // Global Bot Error Catcher to prevent crashes
 bot.catch((err, ctx) => {

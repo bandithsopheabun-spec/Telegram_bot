@@ -1,127 +1,114 @@
-// Blessing.Kh SMM Web Portal Logic
+// Blessing.Kh SMM Web Portal — real backend, Login with Telegram
+// Every action here calls the real API added to index.js (auth, packages,
+// orders, deposits) — no local mock/demo state.
 
-const SMM_DATA = {
-    tiktok: {
-        categories: [
-            { id: 'tt_like_views', name: '❤️ Like & Views Khmer (ខ្មែរសុទ្ធ)' },
-            { id: 'tt_video_views', name: '👀 Video Views Khmer' },
-            { id: 'tt_followers', name: '👥 Followers Khmer' }
-        ],
-        packages: {
-            tt_like_views: [
-                { name: '❤️ 549 - 1.2K Likes + 👀 700 - 2.5K Views', price: 1.99 },
-                { name: '❤️ 900 - 2.5K Likes + 👀 1.5K - 4.5K Views', price: 3.00 },
-                { name: '❤️ 3K - 6.8K Likes + 👀 4.5K - 15.5K Views', price: 8.00 },
-                { name: '❤️ 6.6K - 14.8K Likes + 👀 9.5K - 38.5K Views', price: 16.00 },
-                { name: '❤️ 15K - 34K Likes + 👀 22.5K - 77K Views', price: 35.00 },
-                { name: '❤️ 35.7K - 80K Likes + 👀 50.5K - 180K Views', price: 80.00 },
-                { name: '❤️ 73.5K - 168K Likes + 👀 110K - 360K Views', price: 150.00 },
-                { name: '❤️ 297K - 668K Likes + 👀 450K - 1.2M Views', price: 500.00 }
-            ],
-            tt_video_views: [
-                { name: '👀 2.4K - 8.2K Views + Likes Random', price: 1.99 },
-                { name: '👀 4.2K - 14.4K Views + Likes Random', price: 3.00 },
-                { name: '👀 13.2K - 45.3K Views + Likes Random', price: 8.00 },
-                { name: '👀 28.9K - 98.9K Views + Likes Random', price: 16.00 },
-                { name: '👀 66.3K - 226.8K Views + Likes Random', price: 35.00 },
-                { name: '👀 156.7K - 526.1K Views + Likes Random', price: 80.00 },
-                { name: '👀 325.5K - 1.11M Views + Likes Random', price: 150.00 },
-                { name: '👀 1.3M - 4.5M Views + Likes Random', price: 500.00 }
-            ],
-            tt_followers: [
-                { name: '👥 18 - 90 Khmer Followers + Likes & Views', price: 1.99 },
-                { name: '👥 32 - 160 Khmer Followers + Likes & Views', price: 3.00 },
-                { name: '👥 100 - 500 Khmer Followers + Likes & Views', price: 8.00 },
-                { name: '👥 210 - 659 Khmer Followers + Likes & Views', price: 16.00 },
-                { name: '👥 501 - 992 Khmer Followers + Likes & Views', price: 35.00 },
-                { name: '👥 1183 - 1624 Khmer Followers + Likes & Views', price: 80.00 },
-                { name: '👥 2456 - 2897 Khmer Followers + Likes & Views', price: 150.00 },
-                { name: '👥 9822 - 10263 Khmer Followers + Likes & Views', price: 500.00 }
-            ]
-        }
-    },
-    telegram: {
-        categories: [
-            { id: 'tg_subscribers', name: '✈️ Channel Members (សមាជិក)' },
-            { id: 'tg_views', name: '👁️ Post Views & Reactions' }
-        ],
-        packages: {
-            tg_subscribers: [
-                { name: '✈️ 500 Telegram Channel Members', price: 2.50 },
-                { name: '✈️ 1,000 Telegram Channel Members', price: 4.50 },
-                { name: '✈️ 5,000 Telegram Channel Members', price: 20.00 },
-                { name: '✈️ 10,000 Telegram Channel Members', price: 38.00 }
-            ],
-            tg_views: [
-                { name: '👁️ 1,000 Post Views (5 Posts)', price: 1.50 },
-                { name: '👁️ 5,000 Post Views (10 Posts)', price: 4.00 },
-                { name: '👍 1,000 Custom Reactions', price: 3.00 }
-            ]
-        }
-    },
-    facebook: {
-        categories: [
-            { id: 'fb_followers', name: '📘 Page Likes & Followers' },
-            { id: 'fb_reactions', name: '👍 Post Reactions & Shares' }
-        ],
-        packages: {
-            fb_followers: [
-                { name: '📘 1,000 Facebook Page Followers', price: 5.00 },
-                { name: '📘 5,000 Facebook Page Followers', price: 22.00 },
-                { name: '📘 10,000 Facebook Page Followers', price: 40.00 }
-            ],
-            fb_reactions: [
-                { name: '👍 1,000 Post Like/Love Reactions', price: 2.00 },
-                { name: '🔄 500 Post Shares', price: 3.50 }
-            ]
-        }
-    }
-};
-
-// Application State
 let appState = {
-    user: {
-        id: 'Guest-' + Math.floor(1000 + Math.random() * 9000),
-        name: 'Guest Customer',
-        balance: 10.00, // Starter balance for demo testing
-        orderCount: 0
-    },
-    currentPlatform: 'tiktok',
-    currentCategory: 'tt_like_views',
+    me: null,
+    packages: { likes: [], views: [], followers: [] },
+    currentCategory: 'likes',
     selectedPackage: null,
     orders: [],
-    lang: 'km'
+    activeDepositId: null,
+    depositPollTimer: null
 };
 
-// Initialize App
-document.addEventListener('DOMContentLoaded', () => {
-    initTelegramUser();
+const CATEGORY_LABELS = {
+    likes: '❤️ Like & Views Khmer (ខ្មែរសុទ្ធ)',
+    views: '👀 Video Views Khmer',
+    followers: '👥 Followers Khmer'
+};
+
+document.addEventListener('DOMContentLoaded', init);
+
+async function init() {
     initNavigationTabs();
     initPlatformSelector();
-    renderCategories();
-    renderPackages();
-    initDepositSection();
     initOrderForm();
-    updateUserUi();
+    initDepositSection();
+    document.getElementById('btnLogout').addEventListener('click', logout);
 
-    console.log('Blessing.Kh Web App Ready');
-});
+    // Already have a valid session? (returning visit — cookie still valid)
+    const me = await fetchMe();
+    if (me) {
+        await enterApp(me);
+        return;
+    }
 
-// Telegram WebApp Setup
-function initTelegramUser() {
-    if (window.Telegram && window.Telegram.WebApp) {
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-            const u = tg.initDataUnsafe.user;
-            appState.user.id = u.id;
-            appState.user.name = (u.first_name + ' ' + (u.last_name || '')).trim();
-            document.getElementById('statusText').textContent = 'Online (Telegram WebApp Connected)';
+    await showLoginGate();
+}
+
+// ================= AUTH =================
+
+async function showLoginGate() {
+    try {
+        const res = await fetch('/api/bot-info');
+        const info = await res.json();
+        document.getElementById('loginBrandName').textContent = info.brandName || 'Blessing.Kh';
+
+        if (info.username) {
+            const script = document.createElement('script');
+            script.src = 'https://telegram.org/js/telegram-widget.js?22';
+            script.setAttribute('data-telegram-login', info.username);
+            script.setAttribute('data-size', 'large');
+            script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+            script.setAttribute('data-request-access', 'write');
+            document.getElementById('telegramLoginContainer').appendChild(script);
+        } else {
+            document.getElementById('loginHint').textContent = '⚠️ Login temporarily unavailable — please try again shortly.';
         }
+    } catch (e) {
+        document.getElementById('loginHint').textContent = '⚠️ Could not reach server.';
     }
 }
 
-function getRank(count) {
+// Called by the Telegram Login Widget after the user authorizes
+window.onTelegramAuth = async function (user) {
+    document.getElementById('loginHint').textContent = 'កំពុងចូល... (Signing in...)';
+    try {
+        const res = await fetch('/api/auth/telegram-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(user)
+        });
+        if (!res.ok) {
+            document.getElementById('loginHint').textContent = '❌ Login failed — please try again.';
+            return;
+        }
+        const me = await fetchMe();
+        if (me) await enterApp(me);
+    } catch (e) {
+        document.getElementById('loginHint').textContent = '❌ Login failed — please try again.';
+    }
+};
+
+async function logout() {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+    location.reload();
+}
+
+async function fetchMe() {
+    try {
+        const res = await fetch('/api/me');
+        if (!res.ok) return null;
+        return await res.json();
+    } catch (e) {
+        return null;
+    }
+}
+
+async function enterApp(me) {
+    appState.me = me;
+    document.getElementById('loginGate').classList.add('hidden');
+    document.getElementById('appLayout').classList.remove('hidden');
+
+    updateUserUi();
+    await loadPackages();
+    await loadOrderHistory();
+}
+
+// ================= PROFILE UI =================
+
+function getRankEmoji(count) {
     if (count >= 50) return '👑 Master Supreme VIP';
     if (count >= 20) return '💎 Diamond Member';
     if (count >= 5) return '🥇 Gold Member';
@@ -130,24 +117,34 @@ function getRank(count) {
 }
 
 function updateUserUi() {
-    document.getElementById('userName').textContent = appState.user.name;
-    document.getElementById('userId').textContent = appState.user.id;
-    document.getElementById('userBalance').textContent = `$${appState.user.balance.toFixed(2)}`;
-    document.getElementById('sumBalance').textContent = `$${appState.user.balance.toFixed(2)} USD`;
-    document.getElementById('userRank').textContent = getRank(appState.user.orderCount);
+    const me = appState.me;
+    if (!me) return;
+    document.getElementById('userBalance').textContent = `$${me.balance.toFixed(2)}`;
+    document.getElementById('sumBalance').textContent = `$${me.balance.toFixed(2)} USD`;
+    document.getElementById('userId').textContent = me.telegramId;
+    document.getElementById('userRank').textContent = me.rank || getRankEmoji(me.orderCount);
+
+    const resellerBadge = document.getElementById('resellerBadge');
+    if (me.isReseller) {
+        resellerBadge.textContent = `🏅 Reseller — -${me.resellerDiscountPercent}% Wholesale`;
+        resellerBadge.classList.remove('hidden');
+    } else {
+        resellerBadge.classList.add('hidden');
+    }
 }
 
-// Navigation Tabs
+// ================= NAVIGATION =================
+
 function initNavigationTabs() {
     const tabs = document.querySelectorAll('.tab-btn');
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-
             const target = tab.getAttribute('data-tab');
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(target).classList.add('active');
+            if (target === 'tab-history') loadOrderHistory();
         });
     });
 
@@ -156,49 +153,55 @@ function initNavigationTabs() {
     });
 }
 
-// Platform Selection
 function initPlatformSelector() {
     const cards = document.querySelectorAll('.platform-card');
     cards.forEach(card => {
         card.addEventListener('click', () => {
+            const platform = card.getAttribute('data-platform');
+            if (platform !== 'tiktok') {
+                showToast('🚧 Service under construction. Please select TikTok for now!', 'error');
+                return;
+            }
             cards.forEach(c => c.classList.remove('active'));
             card.classList.add('active');
-
-            appState.currentPlatform = card.getAttribute('data-platform');
-            appState.currentCategory = SMM_DATA[appState.currentPlatform].categories[0].id;
-            
-            renderCategories();
-            renderPackages();
         });
     });
 }
 
-// Category Buttons
+// ================= PACKAGES / ORDERING =================
+
+async function loadPackages() {
+    try {
+        const res = await fetch('/api/packages');
+        if (!res.ok) return;
+        appState.packages = await res.json();
+        renderCategories();
+        renderPackages();
+    } catch (e) {}
+}
+
 function renderCategories() {
     const container = document.getElementById('categorySelector');
     container.innerHTML = '';
-
-    const categories = SMM_DATA[appState.currentPlatform].categories;
-    categories.forEach((cat, index) => {
+    Object.keys(CATEGORY_LABELS).forEach(catId => {
         const btn = document.createElement('button');
-        btn.className = `cat-btn ${cat.id === appState.currentCategory ? 'active' : ''}`;
-        btn.textContent = cat.name;
+        btn.className = `cat-btn ${catId === appState.currentCategory ? 'active' : ''}`;
+        btn.textContent = CATEGORY_LABELS[catId];
         btn.addEventListener('click', () => {
             document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            appState.currentCategory = cat.id;
+            appState.currentCategory = catId;
             renderPackages();
         });
         container.appendChild(btn);
     });
 }
 
-// Package Select Dropdown
 function renderPackages() {
     const select = document.getElementById('packageSelect');
     select.innerHTML = '';
 
-    const packages = SMM_DATA[appState.currentPlatform].packages[appState.currentCategory] || [];
+    const packages = appState.packages[appState.currentCategory] || [];
     packages.forEach((pkg, idx) => {
         const opt = document.createElement('option');
         opt.value = idx;
@@ -219,7 +222,7 @@ function renderPackages() {
 }
 
 function updateOrderSummary() {
-    if (!appState.selectedPackage) return;
+    if (!appState.selectedPackage || !appState.me) return;
 
     document.getElementById('sumPackageName').textContent = appState.selectedPackage.name;
     document.getElementById('sumPrice').textContent = `$${appState.selectedPackage.price.toFixed(2)} USD`;
@@ -227,7 +230,7 @@ function updateOrderSummary() {
     const warning = document.getElementById('balanceWarning');
     const submitBtn = document.getElementById('btnSubmitOrder');
 
-    if (appState.user.balance < appState.selectedPackage.price) {
+    if (appState.me.balance < appState.selectedPackage.price) {
         warning.classList.remove('hidden');
         submitBtn.disabled = true;
         submitBtn.style.opacity = '0.5';
@@ -238,58 +241,54 @@ function updateOrderSummary() {
     }
 }
 
-// Order Form Submission
 function initOrderForm() {
     const btn = document.getElementById('btnSubmitOrder');
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
         const link = document.getElementById('targetLinkInput').value.trim();
         if (!link) {
             showToast('⚠️ សូមបញ្ចូល Link target របស់អ្នកជាមុនសិន!', 'error');
             return;
         }
+        if (!appState.selectedPackage) return;
 
-        if (appState.user.balance < appState.selectedPackage.price) {
-            showToast('⚠️ តុល្យភាពមិនគ្រប់គ្រាន់ឡើយ! សូមបញ្ចូលលុយជាមុនសិន', 'error');
-            return;
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    packageName: appState.selectedPackage.name,
+                    price: appState.selectedPackage.price,
+                    targetLink: link
+                })
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                if (data.error === 'insufficient_balance') {
+                    showToast('⚠️ តុល្យភាពមិនគ្រប់គ្រាន់ឡើយ! សូមបញ្ចូលលុយជាមុនសិន', 'error');
+                } else {
+                    showToast('⚠️ បញ្ជាទិញមិនជោគជ័យ — សូមសាកល្បងម្តងទៀត', 'error');
+                }
+                return;
+            }
+
+            appState.me.balance = data.newBalance;
+            updateUserUi();
+            updateOrderSummary();
+            document.getElementById('targetLinkInput').value = '';
+            await loadOrderHistory();
+            showToast(`🎉 បញ្ជាទិញជោគជ័យ! ${data.orderId}`, 'success');
+        } catch (e) {
+            showToast('⚠️ បញ្ហាបណ្តាញ — សូមសាកល្បងម្តងទៀត', 'error');
+        } finally {
+            btn.disabled = false;
         }
-
-        // Deduct Balance
-        appState.user.balance -= appState.selectedPackage.price;
-        appState.user.orderCount += 1;
-
-        const orderId = 'ORD-' + Math.floor(100000 + Math.random() * 900000);
-        const newOrder = {
-            id: orderId,
-            package: appState.selectedPackage.name,
-            price: appState.selectedPackage.price,
-            link: link,
-            status: 'Processing',
-            date: new Date().toLocaleString()
-        };
-
-        appState.orders.unshift(newOrder);
-
-        // Send data to Telegram WebApp if connected
-        if (window.Telegram && window.Telegram.WebApp) {
-            window.Telegram.WebApp.sendData(JSON.stringify({
-                action: 'create_order',
-                orderId: orderId,
-                package: appState.selectedPackage.name,
-                price: appState.selectedPackage.price,
-                link: link
-            }));
-        }
-
-        updateUserUi();
-        updateOrderSummary();
-        renderOrderHistory();
-        document.getElementById('targetLinkInput').value = '';
-
-        showToast(`🎉 បញ្ជាទិញជោគជ័យ! #${orderId}`, 'success');
     });
 }
 
-// Deposit KHQR Generator
+// ================= DEPOSIT (REAL KHQR) =================
+
 function initDepositSection() {
     const amountBtns = document.querySelectorAll('.amount-btn');
     const customInput = document.getElementById('customAmountInput');
@@ -302,42 +301,103 @@ function initDepositSection() {
         });
     });
 
-    document.getElementById('btnGenerateQr').addEventListener('click', () => {
+    document.getElementById('btnGenerateQr').addEventListener('click', async () => {
         const amount = parseFloat(customInput.value) || 1.99;
-        generateKhqrCode(amount);
-    });
-
-    document.getElementById('btnSimulatePay').addEventListener('click', () => {
-        const amount = parseFloat(document.getElementById('qrAmountLabel').getAttribute('data-amt')) || 1.99;
-        appState.user.balance += amount;
-        updateUserUi();
-        updateOrderSummary();
-
-        document.getElementById('qrCard').classList.add('hidden');
-        showToast(`🎉 ទទួលបាន $${amount.toFixed(2)} USD ចូលកាបូបលុយស្វ័យប្រវត្តិ!`, 'success');
+        await generateRealDeposit(amount);
     });
 }
 
-function generateKhqrCode(amount) {
-    const card = document.getElementById('qrCard');
-    const label = document.getElementById('qrAmountLabel');
-    const canvas = document.getElementById('qrCanvas');
+async function generateRealDeposit(amount) {
+    stopDepositPolling();
 
-    label.textContent = `$${amount.toFixed(2)} USD`;
-    label.setAttribute('data-amt', amount);
-    card.classList.remove('hidden');
+    const genBtn = document.getElementById('btnGenerateQr');
+    genBtn.disabled = true;
+    genBtn.textContent = '⏳ កំពុងបង្កើត QR...';
 
-    // Dynamic payload simulation string matching Bakong EMVCo structure
-    const payload = `00020101021229300015km.gov.nbc.bakong0121bun_bandithsophea@bkrt5204599953038405404${amount.toFixed(2)}5802KH5918Blessing.Kh SMM6010Phnom Penh620701031006304ABCD`;
-
-    if (window.QRCode) {
-        QRCode.toCanvas(canvas, payload, { width: 200, margin: 1 }, (err) => {
-            if (err) console.error(err);
+    try {
+        const res = await fetch('/api/deposits', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ amount })
         });
+        if (!res.ok) {
+            showToast('⚠️ មិនអាចបង្កើត QR បានទេ — សូមសាកល្បងម្តងទៀត', 'error');
+            return;
+        }
+        const dep = await res.json();
+
+        const card = document.getElementById('qrCard');
+        const label = document.getElementById('qrAmountLabel');
+        const canvas = document.getElementById('qrCanvas');
+        const statusText = document.getElementById('qrStatusText');
+
+        label.textContent = `$${dep.amount.toFixed(2)} USD`;
+        statusText.textContent = '⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...';
+        card.classList.remove('hidden');
+
+        if (window.QRCode) {
+            QRCode.toCanvas(canvas, dep.qrString, { width: 220, margin: 1 }, (err) => {
+                if (err) console.error(err);
+            });
+        }
+
+        appState.activeDepositId = dep.depositId;
+        const balanceBeforePay = appState.me.balance;
+        pollDepositStatus(dep.depositId, balanceBeforePay);
+    } catch (e) {
+        showToast('⚠️ បញ្ហាបណ្តាញ — សូមសាកល្បងម្តងទៀត', 'error');
+    } finally {
+        genBtn.disabled = false;
+        genBtn.textContent = '✨ បង្កើត Bakong KHQR Code';
     }
 }
 
-// Order History List
+function pollDepositStatus(depositId, balanceBeforePay) {
+    appState.depositPollTimer = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/deposits/${depositId}/status`);
+            const data = await res.json();
+            if (data.status === 'pending') return; // still waiting
+
+            stopDepositPolling();
+
+            const me = await fetchMe();
+            if (me) {
+                appState.me = me;
+                updateUserUi();
+                updateOrderSummary();
+            }
+
+            const statusText = document.getElementById('qrStatusText');
+            if (me && me.balance > balanceBeforePay) {
+                statusText.textContent = '🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរួចរាល់!';
+                showToast('🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរបស់អ្នករួចរាល់!', 'success');
+            } else {
+                statusText.textContent = '⌛ QR នេះផុតកំណត់ — សូមបង្កើតថ្មី។';
+            }
+        } catch (e) {}
+    }, 4000);
+}
+
+function stopDepositPolling() {
+    if (appState.depositPollTimer) {
+        clearInterval(appState.depositPollTimer);
+        appState.depositPollTimer = null;
+    }
+}
+
+// ================= ORDER HISTORY =================
+
+async function loadOrderHistory() {
+    try {
+        const res = await fetch('/api/orders');
+        if (!res.ok) return;
+        const data = await res.json();
+        appState.orders = data.orders || [];
+        renderOrderHistory();
+    } catch (e) {}
+}
+
 function renderOrderHistory() {
     const list = document.getElementById('historyList');
     if (appState.orders.length === 0) {
@@ -352,21 +412,22 @@ function renderOrderHistory() {
     list.innerHTML = appState.orders.map(o => `
         <div class="history-card">
             <div class="history-header">
-                <span class="order-id">#${o.id}</span>
+                <span class="order-id">${o.order_id}</span>
                 <span class="order-status status-processing">🟡 ${o.status}</span>
             </div>
             <div class="history-body">
-                <strong>${o.package}</strong>
+                <strong>${o.package_name}</strong>
             </div>
             <div class="history-footer">
-                <span>$${o.price.toFixed(2)} USD</span>
-                <span>${o.date}</span>
+                <span>$${parseFloat(o.price).toFixed(2)} USD</span>
+                <span>${new Date(o.created_at).toLocaleString()}</span>
             </div>
         </div>
     `).join('');
 }
 
-// Toast Notifications
+// ================= TOAST =================
+
 function showToast(message, type = 'success') {
     const container = document.getElementById('toastContainer');
     const toast = document.createElement('div');

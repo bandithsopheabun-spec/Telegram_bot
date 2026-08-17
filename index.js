@@ -230,6 +230,69 @@ function generateDynamicKhqr(merchantId, merchantName, amount, depositId) {
     return rawPayload + checksum;
 }
 
+// ==========================================
+// WEB LOGIN (Telegram Login Widget) + SESSIONS
+// For the standalone web ordering site (website/) — verifies the data the
+// official Telegram Login Widget returns, per Telegram's documented algorithm:
+// https://core.telegram.org/widgets/login#checking-authorization
+// ==========================================
+function verifyTelegramLoginData(data) {
+    const { hash, ...rest } = data || {};
+    if (!hash) return false;
+
+    const checkString = Object.keys(rest)
+        .filter(k => rest[k] !== undefined && rest[k] !== null)
+        .sort()
+        .map(k => `${k}=${rest[k]}`)
+        .join('\n');
+
+    const secretKey = require('crypto').createHash('sha256').update(botToken).digest();
+    const computedHash = require('crypto').createHmac('sha256', secretKey).update(checkString).digest('hex');
+
+    if (computedHash !== hash) return false;
+
+    // Reject stale login data (replay protection) — older than 24 hours
+    const authDate = parseInt(rest.auth_date, 10);
+    if (!authDate || (Date.now() / 1000 - authDate) > 86400) return false;
+
+    return true;
+}
+
+// sessionToken -> { telegramId, expiresAt }
+const webSessions = new Map();
+const WEB_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function createWebSession(telegramId) {
+    const token = require('crypto').randomBytes(32).toString('hex');
+    webSessions.set(token, { telegramId, expiresAt: Date.now() + WEB_SESSION_TTL_MS });
+    return token;
+}
+
+function parseCookies(req) {
+    const header = req.headers.cookie;
+    const out = {};
+    if (!header) return out;
+    header.split(';').forEach(pair => {
+        const idx = pair.indexOf('=');
+        if (idx === -1) return;
+        out[pair.slice(0, idx).trim()] = decodeURIComponent(pair.slice(idx + 1).trim());
+    });
+    return out;
+}
+
+function getSessionUserId(req) {
+    const cookies = parseCookies(req);
+    const token = cookies['blessing_session'];
+    if (!token) return null;
+    const session = webSessions.get(token);
+    if (!session) return null;
+    if (session.expiresAt < Date.now()) {
+        webSessions.delete(token);
+        return null;
+    }
+    return session.telegramId;
+}
+
 // 100% FULLY AUTOMATED BACKGROUND PAYMENT ENGINE (NO CUSTOMER BUTTON CLICK NEEDED)
 const pendingAutoDeposits = {};
 const userLastPendingDeposit = {};
@@ -436,6 +499,53 @@ async function dbCreateOrder(userId, orderId, packageName, price, targetLink) {
     } catch (err) {
         console.error('⚠️ dbCreateOrder error:', err.message);
     }
+}
+
+// Shared order-finalization logic — used by both the Telegram AWAITING_LINK
+// text handler and the web API's POST /api/orders, so the money-moving logic
+// (balance check, deduction, order record, admin notification) lives in one
+// place instead of being duplicated per channel.
+async function finalizeOrder(userId, packageTitle, price, targetLink, customerFirstName) {
+    const currentBalance = getBalance(userId);
+    if (currentBalance < price) {
+        return { success: false, error: 'insufficient_balance', currentBalance };
+    }
+
+    const newBalance = currentBalance - price;
+    await dbUpdateBalance(userId, newBalance);
+
+    const orderId = `#ORD-${Math.floor(100000 + Math.random() * 900000)}`;
+    await dbCreateOrder(userId, orderId, packageTitle, price, targetLink);
+
+    const cleanOrderId = orderId.replace('#', '');
+    const groupOrderMsg =
+        `🛒 <b>មានការបញ្ជាទិញថ្មី (New Order Placed)!</b>\n` +
+        (isReseller(userId) ? `🏅 <b>Reseller Order (-${resellerDiscountPercent}% wholesale)</b>\n` : '') +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
+        `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+        `👤 <b>Customer:</b> ${customerFirstName || 'Customer'}\n` +
+        `📦 <b>Package:</b> ${packageTitle}\n` +
+        `💵 <b>Price:</b> $${price.toFixed(2)} USD\n` +
+        `🔗 <b>Link:</b> ${targetLink}\n` +
+        `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
+
+    const doneOrderKb = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${userId}`)],
+        [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)]
+    ]);
+
+    try {
+        await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, groupOrderMsg, {
+            parse_mode: 'HTML',
+            ...doneOrderKb
+        });
+        console.log('✅ Sent new order notification to Admin Private Channel!');
+    } catch (e) {
+        console.error('⚠️ Could not send order notification to admin channel:', e.message);
+    }
+
+    return { success: true, orderId, newBalance };
 }
 
 // ==========================================
@@ -2140,62 +2250,29 @@ bot.on('text', async (ctx, next) => {
 
         const packageTitle = state.package;
         const price = state.price;
-        const currentBalance = getBalance(userId);
 
         delete userState[userId];
 
-        if (currentBalance < price) {
-            const err = lang === 'km' ? 
+        const result = await finalizeOrder(userId, packageTitle, price, text, ctx.from.first_name);
+
+        if (!result.success) {
+            const err = lang === 'km' ?
                 `❌ <b>តុល្យភាពលុយមិនគ្រប់គ្រាន់!</b>\n\n` +
                 `📦 Package: <code>${packageTitle}</code>\n` +
                 `💵 តម្លៃ៖ <b>$${price.toFixed(2)} USD</b>\n` +
-                `👛 តុល្យភាពបច្ចុប្បន្ន៖ <b>$${currentBalance.toFixed(2)} USD</b>\n\n` +
+                `👛 តុល្យភាពបច្ចុប្បន្ន៖ <b>$${result.currentBalance.toFixed(2)} USD</b>\n\n` +
                 `សូមចុច <b>👛 បញ្ចូលលុយ</b> ដើម្បីបញ្ចូលលុយជាមុនសិន!` :
                 `❌ <b>Insufficient Balance!</b>\n\n` +
                 `📦 Package: <code>${packageTitle}</code>\n` +
                 `💵 Price: <b>$${price.toFixed(2)} USD</b>\n` +
-                `👛 Current Balance: <b>$${currentBalance.toFixed(2)} USD</b>\n\n` +
+                `👛 Current Balance: <b>$${result.currentBalance.toFixed(2)} USD</b>\n\n` +
                 `Please click <b>👛 Add Funds</b> to deposit first!`;
             return ctx.replyWithHTML(err, getMainKeyboard(lang));
         }
 
-        const newBalance = currentBalance - price;
-        await dbUpdateBalance(userId, newBalance);
+        const { orderId, newBalance } = result;
 
-        const orderId = `#ORD-${Math.floor(100000 + Math.random() * 900000)}`;
-        await dbCreateOrder(userId, orderId, packageTitle, price, text);
-
-        // Notify Group LazR v3.0 Supports (-1004472889092) with 1-Click [ ✅ ចុចបញ្ចប់ការទិញ (Done) ] Button
-        const cleanOrderId = orderId.replace('#', '');
-        const groupOrderMsg =
-            `🛒 <b>មានការបញ្ជាទិញថ្មី (New Order Placed)!</b>\n` +
-            (isReseller(userId) ? `🏅 <b>Reseller Order (-${resellerDiscountPercent}% wholesale)</b>\n` : '') +
-            `----------------------------------------\n` +
-            `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
-            `📲 <b>User ID:</b> <code>${userId}</code>\n` +
-            `👤 <b>Customer:</b> ${ctx.from.first_name || 'Customer'}\n` +
-            `📦 <b>Package:</b> ${packageTitle}\n` +
-            `💵 <b>Price:</b> $${price.toFixed(2)} USD\n` +
-            `🔗 <b>Link:</b> ${text}\n` +
-            `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
-
-        const doneOrderKb = Markup.inlineKeyboard([
-            [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${userId}`)],
-            [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)]
-        ]);
-
-        const targetGroup = TARGET_ADMIN_CHAT_ID;
-        try {
-            await bot.telegram.sendMessage(targetGroup, groupOrderMsg, {
-                parse_mode: 'HTML',
-                ...doneOrderKb
-            });
-            console.log('✅ Sent new order notification to Admin Private Channel (-1003953732694)!');
-        } catch (e) {
-            console.error('⚠️ Could not send order notification to admin channel:', e.message);
-        }
-
-        const successMsg = lang === 'km' ? 
+        const successMsg = lang === 'km' ?
             `✅ <b>បញ្ជាទិញជោគជ័យ! (Order Successful)</b>\n\n` +
             `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
             `📦 <b>Package:</b> ${packageTitle}\n` +
@@ -4167,7 +4244,161 @@ launchBot();
 
 // HTTP Server for Render Health Check & ABA PayWay Webhooks
 const PORT = process.env.PORT || 3000;
+function readJsonBody(req) {
+    return new Promise((resolve) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try { resolve(JSON.parse(body || '{}')); } catch (e) { resolve({}); }
+        });
+    });
+}
+
+function sendJson(res, statusCode, obj) {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(obj));
+}
+
 http.createServer(async (req, res) => {
+    const apiPath = req.url.split('?')[0];
+
+    // ==========================================
+    // JSON API for the standalone web ordering site (website/) — session-gated
+    // via the Telegram Login Widget (see verifyTelegramLoginData above).
+    // ==========================================
+    if (apiPath.startsWith('/api/')) {
+        if (apiPath === '/api/bot-info' && req.method === 'GET') {
+            // Public — lets the frontend build the Telegram Login Widget without
+            // hardcoding the bot's @username (so this same file works for any
+            // white-label clone, see BRAND_NAME/NEW_CLIENT_SETUP.md).
+            return sendJson(res, 200, { username: (bot.botInfo && bot.botInfo.username) || null, brandName: BRAND_NAME });
+        }
+
+        if (apiPath === '/api/auth/telegram-login' && req.method === 'POST') {
+            const data = await readJsonBody(req);
+            if (!verifyTelegramLoginData(data)) {
+                return sendJson(res, 401, { error: 'invalid_login' });
+            }
+            const telegramId = parseInt(data.id, 10);
+            await dbGetUser(telegramId, data.first_name, data.username);
+            if (data.username) userLang[telegramId] = userLang[telegramId] || 'km';
+            const token = createWebSession(telegramId);
+            res.setHeader('Set-Cookie', `blessing_session=${token}; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(WEB_SESSION_TTL_MS / 1000)}; Path=/`);
+            return sendJson(res, 200, { ok: true });
+        }
+
+        if (apiPath === '/api/auth/logout' && req.method === 'POST') {
+            const cookies = parseCookies(req);
+            if (cookies['blessing_session']) webSessions.delete(cookies['blessing_session']);
+            res.setHeader('Set-Cookie', 'blessing_session=; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Path=/');
+            return sendJson(res, 200, { ok: true });
+        }
+
+        const sessionUserId = getSessionUserId(req);
+        if (!sessionUserId) {
+            return sendJson(res, 401, { error: 'not_logged_in' });
+        }
+
+        if (apiPath === '/api/me' && req.method === 'GET') {
+            await dbGetUser(sessionUserId);
+            const balance = getBalance(sessionUserId);
+            const orderCount = getOrdersCount(sessionUserId);
+            return sendJson(res, 200, {
+                telegramId: sessionUserId,
+                balance,
+                orderCount,
+                rank: getUserRank(orderCount),
+                isReseller: isReseller(sessionUserId),
+                resellerDiscountPercent: isReseller(sessionUserId) ? resellerDiscountPercent : 0
+            });
+        }
+
+        if (apiPath === '/api/packages' && req.method === 'GET') {
+            const withEffectivePrice = (list) => list.map(p => ({
+                name: p.name,
+                price: parseFloat(getEffectivePrice(p.price, sessionUserId).toFixed(2))
+            }));
+            return sendJson(res, 200, {
+                likes: withEffectivePrice(dynamicPackagePrices.likes),
+                views: withEffectivePrice(dynamicPackagePrices.views),
+                followers: withEffectivePrice(dynamicPackagePrices.followers)
+            });
+        }
+
+        if (apiPath === '/api/orders' && req.method === 'GET') {
+            let orders = userOrdersCache[sessionUserId] || [];
+            if (supabase) {
+                try {
+                    const { data } = await supabase
+                        .from('orders')
+                        .select('*')
+                        .eq('telegram_id', sessionUserId)
+                        .order('created_at', { ascending: false })
+                        .limit(50);
+                    if (data) orders = data;
+                } catch (e) {}
+            }
+            return sendJson(res, 200, { orders });
+        }
+
+        if (apiPath === '/api/orders' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const { packageName, price, targetLink } = body;
+            if (!packageName || !price || !targetLink) {
+                return sendJson(res, 400, { error: 'missing_fields' });
+            }
+            if (!targetLink.toLowerCase().includes('http')) {
+                return sendJson(res, 400, { error: 'invalid_link' });
+            }
+            const result = await finalizeOrder(sessionUserId, packageName, parseFloat(price), targetLink, null);
+            if (!result.success) {
+                return sendJson(res, 400, { error: result.error, currentBalance: result.currentBalance });
+            }
+            return sendJson(res, 200, { orderId: result.orderId, newBalance: result.newBalance });
+        }
+
+        if (apiPath === '/api/deposits' && req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const amount = parseFloat(body.amount);
+            if (isNaN(amount) || amount <= 0) {
+                return sendJson(res, 400, { error: 'invalid_amount' });
+            }
+            const bonusPercent = (isBonusPromoOn && amount >= bonusMinDeposit) ? bonusPercentage : 0;
+            const bonusAmount = (amount * bonusPercent) / 100;
+            const depositId = `DEP${Math.floor(100000 + Math.random() * 900000)}`;
+
+            if (supabase) {
+                try {
+                    await supabase.from('deposits').insert([{
+                        deposit_id: depositId, telegram_id: sessionUserId,
+                        amount, bonus: bonusAmount, status: 'Pending'
+                    }]);
+                } catch (e) {}
+            }
+
+            let dynamicQrData = await fetchBakongApiKhqrString(bakongAccountId || 'lasa_leng@aclb', amount, depositId);
+            if (!dynamicQrData) {
+                dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
+            }
+            const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
+            registerPendingAutoDeposit(depositId, sessionUserId, amount, bonusAmount, md5Hash);
+
+            return sendJson(res, 200, {
+                depositId, amount, bonusAmount,
+                qrString: dynamicQrData,
+                qrImageUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(dynamicQrData)}`
+            });
+        }
+
+        if (apiPath.startsWith('/api/deposits/') && apiPath.endsWith('/status') && req.method === 'GET') {
+            const depositId = apiPath.split('/')[3];
+            const pending = pendingAutoDeposits[depositId];
+            return sendJson(res, 200, { status: pending ? 'pending' : 'paid_or_expired' });
+        }
+
+        return sendJson(res, 404, { error: 'not_found' });
+    }
+
     if (req.url && (req.url.includes('/payway') || req.url.includes('/callback') || req.url.includes('/webhook'))) {
         let body = '';
         req.on('data', chunk => { body += chunk.toString(); });

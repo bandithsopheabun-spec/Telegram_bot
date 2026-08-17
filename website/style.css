@@ -755,3 +755,49 @@ body {
     from { opacity: 1; transform: translateY(0); }
     to { opacity: 0; transform: translateY(20px); }
 }
+
+/* ========== LOGIN GATE (Telegram Login Widget) ========== */
+.login-gate {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-main);
+    z-index: 100;
+    padding: 24px;
+}
+
+.login-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+    padding: 40px 32px;
+    max-width: 380px;
+    width: 100%;
+    text-align: center;
+}
+
+.login-card h2 {
+    margin: 12px 0 8px;
+    color: var(--text-main);
+}
+
+.login-card p {
+    color: var(--text-sub);
+    font-size: 0.92rem;
+    margin-bottom: 20px;
+}
+
+#telegramLoginContainer {
+    display: flex;
+    justify-content: center;
+    min-height: 40px;
+}
+
+.login-hint {
+    margin-top: 16px !important;
+    font-size: 0.8rem !important;
+    color: var(--text-muted) !important;
+}

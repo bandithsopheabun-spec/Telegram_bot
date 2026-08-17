@@ -595,6 +595,33 @@ async function finalizeOrder(userId, packageTitle, price, targetLink, customerFi
         console.error('⚠️ Could not send order notification to admin channel:', e.message);
     }
 
+    // Customer confirmation — always sent as a Telegram DM regardless of
+    // whether the order came from the bot chat or the website, so the
+    // experience (and a permanent record in their Telegram chat) is
+    // identical on both channels.
+    const lang = getLang(userId);
+    const successMsg = lang === 'km' ?
+        `✅ <b>បញ្ជាទិញជោគជ័យ! (Order Successful)</b>\n\n` +
+        `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageTitle}\n` +
+        `🔗 <b>Link:</b> ${targetLink}\n` +
+        `💸 <b>កាត់ប្រាក់៖</b> $${price.toFixed(2)} USD\n` +
+        `💰 <b>តុល្យភាពនៅសល់៖</b> $${newBalance.toFixed(2)} USD\n\n` +
+        `⚡ ប្រព័ន្ធកំពុងដំណើការបន្ថែមជូនអ្នក...` :
+        `✅ <b>Order Successful!</b>\n\n` +
+        `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageTitle}\n` +
+        `🔗 <b>Link:</b> ${targetLink}\n` +
+        `💸 <b>Deducted:</b> $${price.toFixed(2)} USD\n` +
+        `💰 <b>Remaining Balance:</b> $${newBalance.toFixed(2)} USD\n\n` +
+        `⚡ Processing your order now...`;
+
+    try {
+        await bot.telegram.sendMessage(userId, successMsg, { parse_mode: 'HTML', ...getMainKeyboard(lang) });
+    } catch (e) {
+        console.error('⚠️ Could not DM order confirmation to customer:', e.message);
+    }
+
     return { success: true, orderId, newBalance };
 }
 
@@ -2320,25 +2347,10 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(err, getMainKeyboard(lang));
         }
 
-        const { orderId, newBalance } = result;
-
-        const successMsg = lang === 'km' ?
-            `✅ <b>បញ្ជាទិញជោគជ័យ! (Order Successful)</b>\n\n` +
-            `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
-            `📦 <b>Package:</b> ${packageTitle}\n` +
-            `🔗 <b>Link:</b> ${text}\n` +
-            `💸 <b>កាត់ប្រាក់៖</b> $${price.toFixed(2)} USD\n` +
-            `💰 <b>តុល្យភាពនៅសល់៖</b> $${newBalance.toFixed(2)} USD\n\n` +
-            `⚡ ប្រព័ន្ធកំពុងដំណើការបន្ថែមជូនអ្នក...` :
-            `✅ <b>Order Successful!</b>\n\n` +
-            `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
-            `📦 <b>Package:</b> ${packageTitle}\n` +
-            `🔗 <b>Link:</b> ${text}\n` +
-            `💸 <b>Deducted:</b> $${price.toFixed(2)} USD\n` +
-            `💰 <b>Remaining Balance:</b> $${newBalance.toFixed(2)} USD\n\n` +
-            `⚡ Processing your order now...`;
-
-        return ctx.replyWithHTML(successMsg, getMainKeyboard(lang));
+        // finalizeOrder() already DMs the customer their order confirmation
+        // (same message/keyboard whether ordering from the bot chat or the
+        // website) — nothing further to send here.
+        return;
     }
 
     // ADMIN STEPS IN TEXT INPUT

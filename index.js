@@ -361,12 +361,38 @@ async function rehydratePendingDeposits() {
     }
 }
 
+// NBC's Bakong Open API allows only 100 requests/day per token (discovered
+// the hard way: a customer's real, successful payment sat un-credited all
+// day because the 7s-interval polling had already burned through the daily
+// quota from testing — NBC returned errorCode 17 "Daily request limit of 100
+// exceeded" and every subsequent check silently failed the same way). This
+// budget guard stops calling once we're close to the limit instead of
+// wasting the remaining quota on calls NBC will just reject anyway, and logs
+// clearly so this is diagnosable without a manual API probe next time.
+let bakongApiCallsToday = 0;
+let bakongApiBudgetDate = new Date().toDateString();
+const BAKONG_DAILY_CALL_BUDGET = 90; // stay under NBC's 100/day, leave headroom for manual "I've paid" checks
+
+function canCallBakongApi() {
+    const today = new Date().toDateString();
+    if (today !== bakongApiBudgetDate) {
+        bakongApiBudgetDate = today;
+        bakongApiCallsToday = 0;
+    }
+    return bakongApiCallsToday < BAKONG_DAILY_CALL_BUDGET;
+}
+
 let autoPayInterval = null;
 function startAutoPaymentEngine() {
     if (autoPayInterval) return;
     autoPayInterval = setInterval(async () => {
         const depKeys = Object.keys(pendingAutoDeposits);
         if (depKeys.length === 0) return;
+
+        if (!canCallBakongApi()) {
+            console.log('⚠️ Bakong API daily call budget reached — skipping this auto-payment cycle (deposits stay Pending until admin approves or tomorrow).');
+            return;
+        }
 
         const now = Date.now();
         for (const depId of depKeys) {
@@ -379,6 +405,7 @@ function startAutoPaymentEngine() {
             }
 
             // Check Bakong & ACLEDA Open APIs in background
+            bakongApiCallsToday++;
             const isBakongVerified = await checkBakongTransaction(item.md5Hash);
             const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, item.amount) : false;
 
@@ -431,7 +458,7 @@ function startAutoPaymentEngine() {
                 } catch (e) {}
             }
         }
-    }, 7000);
+    }, 60000); // 60s, not 7s — see BAKONG_DAILY_CALL_BUDGET comment above
 }
 
 rehydratePendingDeposits().then(startAutoPaymentEngine).catch(startAutoPaymentEngine);

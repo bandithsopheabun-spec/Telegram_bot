@@ -31,5 +31,13 @@ CREATE TABLE IF NOT EXISTS public.deposits (
     amount NUMERIC(10,2) NOT NULL,
     bonus NUMERIC(10,2) DEFAULT 0.00,
     status TEXT DEFAULT 'Pending',
+    md5_hash TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Migration for existing databases created before md5_hash was added:
+-- lets the auto-payment engine recover in-flight ("Pending") deposits after
+-- a server restart, instead of forgetting them (see rehydratePendingDeposits
+-- in index.js) — without this column a real customer payment made while the
+-- server happened to restart would never get auto-credited.
+ALTER TABLE public.deposits ADD COLUMN IF NOT EXISTS md5_hash TEXT;

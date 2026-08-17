@@ -309,6 +309,56 @@ function registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5H
     };
     pendingAutoDeposits[depositId] = item;
     userLastPendingDeposit[userId] = item;
+
+    // Persist md5_hash so a server restart (redeploy) doesn't silently forget
+    // an in-flight deposit that the customer has already paid — previously
+    // pendingAutoDeposits only lived in memory, so any restart between QR
+    // generation and payment meant the auto-payment engine could never match
+    // the transaction again even though the money had arrived.
+    if (supabase) {
+        supabase.from('deposits')
+            .update({ md5_hash: md5Hash })
+            .eq('deposit_id', depositId)
+            .then(() => {})
+            .catch(() => {});
+    }
+}
+
+// Re-populate pendingAutoDeposits from Supabase on boot — recovers in-flight
+// deposits that were still "Pending" when the process last restarted (see
+// registerPendingAutoDeposit above). Requires the deposits.md5_hash column;
+// silently no-ops if that column doesn't exist yet (older DB not migrated).
+async function rehydratePendingDeposits() {
+    if (!supabase) return;
+    try {
+        const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+        const { data, error } = await supabase
+            .from('deposits')
+            .select('deposit_id, telegram_id, amount, bonus, md5_hash, created_at')
+            .eq('status', 'Pending')
+            .not('md5_hash', 'is', null)
+            .gte('created_at', cutoff);
+
+        if (error || !data) return;
+
+        for (const dep of data) {
+            if (pendingAutoDeposits[dep.deposit_id]) continue;
+            pendingAutoDeposits[dep.deposit_id] = {
+                depositId: dep.deposit_id,
+                userId: dep.telegram_id,
+                amount: parseFloat(dep.amount),
+                bonusAmount: parseFloat(dep.bonus || 0),
+                totalCredit: parseFloat(dep.amount) + parseFloat(dep.bonus || 0),
+                md5Hash: dep.md5_hash,
+                createdAt: new Date(dep.created_at).getTime()
+            };
+        }
+        if (data.length > 0) {
+            console.log(`✅ Rehydrated ${data.length} pending deposit(s) from Supabase after restart`);
+        }
+    } catch (e) {
+        console.error('⚠️ rehydratePendingDeposits error:', e.message);
+    }
 }
 
 let autoPayInterval = null;
@@ -384,7 +434,7 @@ function startAutoPaymentEngine() {
     }, 7000);
 }
 
-startAutoPaymentEngine();
+rehydratePendingDeposits().then(startAutoPaymentEngine).catch(startAutoPaymentEngine);
 
 // User State & Preferences Storage (In-memory cache + DB fallback)
 const userState = {};

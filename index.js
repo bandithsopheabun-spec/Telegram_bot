@@ -724,19 +724,6 @@ const i18n = {
             `🎁 <b>Bonus បន្ថែម ៖</b>\n` +
             (isBonusPromoOn ? `✦ បញ្ចូល <b>$${bonusMinDeposit.toFixed(2)}+</b> ទទួលបាន <b>+${bonusPercentage}% Bonus</b> ភ្លាមៗ! 🎉\n\n` : `✦ <i>ពុំមានប្រូម៉ូសិន Bonus ក្នុងពេលនេះឡើយ។</i>\n\n`) +
             `👇 <b>សូមវាយបញ្ចូលចំនួនទឹកប្រាក់ ( ឧទាហរណ៍ ៖ 5, 10, 20 ឬ 50 ) ៖</b>`,
-        top_buyers: 
-            `🏆 <b>TOP 10 BUYERS</b> 🏆\n` +
-            `----------------------------------------\n` +
-            `🥇 6673xxxxxx — <b>$34.45</b>\n` +
-            `🥈 1364xxxxxx — <b>$27.00</b>\n` +
-            `🥉 1212xxxxxx — <b>$25.00</b>\n` +
-            `✦ 4. 7225xxxxxx — <b>$23.96</b>\n` +
-            `✦ 5. 6732xxxxxx — <b>$20.87</b>\n` +
-            `✦ 6. 1130xxxxxx — <b>$20.00</b>\n` +
-            `✦ 7. 5833xxxxxx — <b>$18.99</b>\n` +
-            `✦ 8. 6001xxxxxx — <b>$17.74</b>\n` +
-            `✦ 9. 6194xxxxxx — <b>$16.00</b>\n` +
-            `✦ 10. 5123xxxxxx — <b>$15.73</b>`,
         my_orders_empty: `📦 <b>Order History</b>\n\nYou haven't placed any orders yet.`,
         check_order_prompt: `🔍 <b>ពិនិត្យលេខកូដបញ្ជាទិញ</b>\n\nសូមផ្ញើលេខកូដបញ្ជាទិញរបស់អ្នកដើម្បីត្រួតពិនិត្យ (ឧទាហរណ៍ ៖ #ORD-123456) ៖`,
         how_to_order_caption: `💡 <b>វីដេអូណែនាំរបៀបបញ្ជាទិញ (How to Order Guide)</b>\n\n` +
@@ -767,19 +754,6 @@ const i18n = {
             `🎁 <b>Active Bonus:</b>\n` +
             (isBonusPromoOn ? `✦ Deposit <b>$${bonusMinDeposit.toFixed(2)}+</b> get an extra <b>+${bonusPercentage}% Bonus</b>! 🎉\n\n` : `✦ <i>No bonus promotion active right now.</i>\n\n`) +
             `👇 <b>Enter deposit amount (e.g. 5, 10, 20 or 50):</b>`,
-        top_buyers: 
-            `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS</b> ] ━━━━━━━ 🏆\n` +
-            `----------------------------------------\n` +
-            `🥇 6673xxxxxx — <b>$34.45</b>\n` +
-            `🥈 1364xxxxxx — <b>$27.00</b>\n` +
-            `🥉 1212xxxxxx — <b>$25.00</b>\n` +
-            `✦ 4. 7225xxxxxx — <b>$23.96</b>\n` +
-            `✦ 5. 6732xxxxxx — <b>$20.87</b>\n` +
-            `✦ 6. 1130xxxxxx — <b>$20.00</b>\n` +
-            `✦ 7. 5833xxxxxx — <b>$18.99</b>\n` +
-            `✦ 8. 6001xxxxxx — <b>$17.74</b>\n` +
-            `✦ 9. 6194xxxxxx — <b>$16.00</b>\n` +
-            `✦ 10. 5123xxxxxx — <b>$15.73</b>`,
         my_orders_empty: `📦 <b>Order History</b>\n\nYou haven't placed any orders yet.`,
         check_order_prompt: `🔍 <b>Check Order ID</b>\n\nPlease send your Order ID to check (e.g. #ORD-123456):`,
         how_to_order_caption: `💡 <b>How to Order Video Guide</b>\n\n` +

@@ -640,11 +640,53 @@ function saveAdminsConfig() {
     }
 }
 
-// Load dynamic package prices, howto links, start video media, and extra admins from disk on boot
+// Resellers added at runtime via the "Manage Resellers" menu — buy at a
+// discounted wholesale price (resellerDiscountPercent) and resell independently
+// through their own channels; this bot doesn't manage their downstream customers.
+const RESELLERS_FILE = path.join(__dirname, 'resellers_config.json');
+let resellerIdsList = [];
+
+function loadResellersConfig() {
+    try {
+        if (fs.existsSync(RESELLERS_FILE)) {
+            const parsed = JSON.parse(fs.readFileSync(RESELLERS_FILE, 'utf8'));
+            if (Array.isArray(parsed)) {
+                resellerIdsList = parsed.map(id => parseInt(id)).filter(id => !isNaN(id));
+                console.log('✅ Loaded resellerIds from resellers_config.json!');
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ Could not load resellers_config.json:', e.message);
+    }
+}
+
+function saveResellersConfig() {
+    try {
+        fs.writeFileSync(RESELLERS_FILE, JSON.stringify(resellerIdsList, null, 2), 'utf8');
+        console.log('✅ Saved resellerIds to resellers_config.json!');
+    } catch (e) {
+        console.error('⚠️ Could not save resellers_config.json:', e.message);
+    }
+}
+
+// Load dynamic package prices, howto links, start video media, extra admins, and resellers from disk on boot
 loadDynamicPackages();
 loadHowtoConfig();
 loadMediaConfig();
 loadAdminsConfig();
+loadResellersConfig();
+
+const resellerIds = new Set(resellerIdsList);
+let resellerDiscountPercent = 20; // Default wholesale discount for resellers
+
+function isReseller(userId) {
+    if (!userId) return false;
+    return resellerIds.has(parseInt(userId));
+}
+
+function getEffectivePrice(retailPrice, userId) {
+    return isReseller(userId) ? retailPrice * (1 - resellerDiscountPercent / 100) : retailPrice;
+}
 
 function updateDynamicPackagePrice(targetName, newPrice) {
     const targetClean = targetName.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -666,26 +708,26 @@ function updateDynamicPackagePrice(targetName, newPrice) {
 }
 
 // Package Keyboards
-function getLikeViewsPackages(lang) {
+function getLikeViewsPackages(lang, userId) {
     const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
     const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
-    const rows = dynamicPackagePrices.likes.map(p => [`${p.name} = $${p.price.toFixed(2)}`]);
+    const rows = dynamicPackagePrices.likes.map(p => [`${p.name} = $${getEffectivePrice(p.price, userId).toFixed(2)}`]);
     rows.push([backTT, backMain]);
     return Markup.keyboard(rows).resize();
 }
 
-function getVideoViewsPackages(lang) {
+function getVideoViewsPackages(lang, userId) {
     const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
     const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
-    const rows = dynamicPackagePrices.views.map(p => [`${p.name} = $${p.price.toFixed(2)}`]);
+    const rows = dynamicPackagePrices.views.map(p => [`${p.name} = $${getEffectivePrice(p.price, userId).toFixed(2)}`]);
     rows.push([backTT, backMain]);
     return Markup.keyboard(rows).resize();
 }
 
-function getFollowersPackages(lang) {
+function getFollowersPackages(lang, userId) {
     const backTT = lang === 'en' ? '↩ Back to TikTok Services' : '↩ ត្រឡប់ទៅសេវាកម្ម TikTok';
     const backMain = lang === 'en' ? '↩ Back to Main Menu' : '↩ ត្រឡប់ទៅមេនុយដើម';
-    const rows = dynamicPackagePrices.followers.map(p => [`${p.name} = $${p.price.toFixed(2)}`]);
+    const rows = dynamicPackagePrices.followers.map(p => [`${p.name} = $${getEffectivePrice(p.price, userId).toFixed(2)}`]);
     rows.push([backTT, backMain]);
     return Markup.keyboard(rows).resize();
 }
@@ -916,7 +958,13 @@ async function sendAccountProfileCard(ctx) {
         ]
     ]);
 
-    return ctx.replyWithHTML(i18n[lang].account(firstName, userId, balance, ordersCount), {
+    const resellerBadge = isReseller(userId)
+        ? (lang === 'km'
+            ? `\n\n🏅 <b>ស្ថានភាព Reseller ៖</b> សកម្ម (-${resellerDiscountPercent}% តម្លៃដុំ)`
+            : `\n\n🏅 <b>Reseller Status:</b> Active (-${resellerDiscountPercent}% wholesale)`)
+        : '';
+
+    return ctx.replyWithHTML(i18n[lang].account(firstName, userId, balance, ordersCount) + resellerBadge, {
         disable_web_page_preview: true,
         ...cardButtons,
         ...getMainKeyboard(lang)
@@ -1006,21 +1054,21 @@ bot.hears(['❤️ Like & Views Khmer', '🛒 Like & Views Khmer', 'Like & Views
     delete userState[ctx.from.id];
     const lang = getLang(ctx.from.id);
     const text = `🛒 <b>Like & Views Khmer</b>\n----------------------------------------\nTap a package to order:`;
-    ctx.replyWithHTML(text, getLikeViewsPackages(lang));
+    ctx.replyWithHTML(text, getLikeViewsPackages(lang, ctx.from.id));
 });
 
 bot.hears(['👀 Video Views Khmer', '🛒 Video Views Khmer', 'Video Views Khmer'], (ctx) => {
     delete userState[ctx.from.id];
     const lang = getLang(ctx.from.id);
     const text = `🛒 <b>Video Views Khmer</b>\n----------------------------------------\nTap a package to order:`;
-    ctx.replyWithHTML(text, getVideoViewsPackages(lang));
+    ctx.replyWithHTML(text, getVideoViewsPackages(lang, ctx.from.id));
 });
 
 bot.hears(['👥 Followers Khmer', '🛒 Followers Khmer', 'Followers Khmer'], (ctx) => {
     delete userState[ctx.from.id];
     const lang = getLang(ctx.from.id);
     const text = `🛒 <b>Followers Khmer</b>\n----------------------------------------\nTap a package to order:`;
-    ctx.replyWithHTML(text, getFollowersPackages(lang));
+    ctx.replyWithHTML(text, getFollowersPackages(lang, ctx.from.id));
 });
 
 // 📅 MY ORDERS / 📅 ប្រវត្តិទិញ
@@ -1436,7 +1484,7 @@ bot.on('text', async (ctx, next) => {
             return;
         }
 
-        if (state.step === 'AWAITING_ADD_ADMIN_ID') {
+        if (state.step === 'AWAITING_ADMIN_ADD_ID') {
             delete userState[userId];
             const targetId = parseInt(text.replace(/[^0-9]/g, ''));
 
@@ -1463,7 +1511,7 @@ bot.on('text', async (ctx, next) => {
             return;
         }
 
-        if (state.step === 'AWAITING_REMOVE_ADMIN_ID') {
+        if (state.step === 'AWAITING_ADMIN_REMOVE_ID') {
             delete userState[userId];
             const targetId = parseInt(text.replace(/[^0-9]/g, ''));
 
@@ -1484,6 +1532,62 @@ bot.on('text', async (ctx, next) => {
 
             ctx.replyWithHTML(`✅ <b>បានដកចេញ <code>${targetId}</code> ពី Admin ដោយជោគជ័យ!</b>`, adminManageAdminsKeyboard);
             return;
+        }
+
+        if (state.step === 'AWAITING_ADMIN_ADD_RESELLER_ID') {
+            delete userState[userId];
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+
+            if (!targetId || isNaN(targetId)) {
+                return ctx.replyWithHTML('❌ <b>Telegram ID មិនត្រឹមត្រូវ!</b> សូមផ្ញើតែជាលេខ។', adminManageResellersKeyboard);
+            }
+            if (resellerIds.has(targetId)) {
+                return ctx.replyWithHTML(`⚠️ <b>User ID <code>${targetId}</code> ជា Reseller រួចហើយ!</b>`, adminManageResellersKeyboard);
+            }
+
+            resellerIds.add(targetId);
+            resellerIdsList.push(targetId);
+            saveResellersConfig();
+
+            ctx.replyWithHTML(`✅ <b>បានបន្ថែម <code>${targetId}</code> ជា Reseller ដោយជោគជ័យ!</b> (-${resellerDiscountPercent}% wholesale)`, adminManageResellersKeyboard);
+
+            try {
+                await bot.telegram.sendMessage(targetId,
+                    `🎉 <b>អ្នកត្រូវបានតែងតាំងជា Reseller សម្រាប់ BLESSING.KH SMM!</b>\n\n` +
+                    `👛 ចាប់ពីពេលនេះ អ្នកនឹងទទួលបានតម្លៃដុំ -${resellerDiscountPercent}% រាល់ការបញ្ជាទិញសេវាកម្ម!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+            return;
+        }
+
+        if (state.step === 'AWAITING_ADMIN_REMOVE_RESELLER_ID') {
+            delete userState[userId];
+            const targetId = parseInt(text.replace(/[^0-9]/g, ''));
+
+            if (!targetId || isNaN(targetId)) {
+                return ctx.replyWithHTML('❌ <b>Telegram ID មិនត្រឹមត្រូវ!</b>', adminManageResellersKeyboard);
+            }
+            if (!resellerIds.has(targetId)) {
+                return ctx.replyWithHTML(`❌ <b><code>${targetId}</code> មិនមែនជា Reseller ទេ!</b>`, adminManageResellersKeyboard);
+            }
+
+            resellerIds.delete(targetId);
+            resellerIdsList = resellerIdsList.filter(id => id !== targetId);
+            saveResellersConfig();
+
+            ctx.replyWithHTML(`✅ <b>បានដកចេញ <code>${targetId}</code> ពី Reseller ដោយជោគជ័យ!</b>`, adminManageResellersKeyboard);
+            return;
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_RESELLER_DISCOUNT') {
+            delete userState[userId];
+            const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+            if (isNaN(val) || val < 0 || val > 100) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនភាគរយមិនត្រឹមត្រូវ! (0-100)</b>', getAdminPromoKeyboard());
+            }
+            resellerDiscountPercent = val;
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Reseller Discount ទៅជា -${resellerDiscountPercent}% ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
         }
 
         if (state.step === 'AWAITING_ADMIN_PAYWAY_LINK') {
@@ -2058,8 +2162,9 @@ bot.on('text', async (ctx, next) => {
 
         // Notify Group LazR v3.0 Supports (-1004472889092) with 1-Click [ ✅ ចុចបញ្ចប់ការទិញ (Done) ] Button
         const cleanOrderId = orderId.replace('#', '');
-        const groupOrderMsg = 
+        const groupOrderMsg =
             `🛒 <b>មានការបញ្ជាទិញថ្មី (New Order Placed)!</b>\n` +
+            (isReseller(userId) ? `🏅 <b>Reseller Order (-${resellerDiscountPercent}% wholesale)</b>\n` : '') +
             `----------------------------------------\n` +
             `🆔 <b>Order ID:</b> <code>${orderId}</code>\n` +
             `📲 <b>User ID:</b> <code>${userId}</code>\n` +
@@ -2710,22 +2815,28 @@ function getAdminMainKeyboard() {
         ['🎵 Users & Balances', '⚙️ Bot Settings'],
         ['🎁 Promotion Settings', '📊 Analytics & Reports'],
         ['🛠️ Tools & System', isBotOpen ? '🟢 · Bot: open' : '🔴 · Bot: maintenance'],
-        ['👥 · Manage Admins'],
+        ['👥 · Manage Admins', '💼 · Manage Resellers'],
         ['💸 · Exit to user']
     ]).resize();
 }
 
 function getAdminPromoKeyboard() {
-    const promoBtn = isBonusPromoOn 
-        ? `🎁 Bonus (${bonusPercentage}% on $${bonusMinDeposit.toFixed(0)}+): ✅ ON` 
+    const promoBtn = isBonusPromoOn
+        ? `🎁 Bonus (${bonusPercentage}% on $${bonusMinDeposit.toFixed(0)}+): ✅ ON`
         : `🎁 Bonus (${bonusPercentage}%): ❌ OFF`;
 
     return Markup.keyboard([
         [promoBtn],
         ['✏️ · Edit Bonus Rate (%)', '💵 · Edit Min Bonus Deposit ($)'],
+        [`✏️ · Edit Reseller Discount (${resellerDiscountPercent}%)`],
         ['🔐 Admin Menu']
     ]).resize();
 }
+
+const adminManageResellersKeyboard = Markup.keyboard([
+    ['➕ Add Reseller ID', '➖ Remove Reseller ID'],
+    ['🔐 Admin Menu']
+]).resize();
 
 const adminUsersKeyboard = Markup.keyboard([
     ['🔍 Find user', '📋 All Users'],
@@ -2946,6 +3057,20 @@ bot.hears(['✏️ · Edit Bonus Rate (%)', 'Edit Bonus Rate (%)', 'Edit Bonus R
     ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
 });
 
+// ✏️ EDIT RESELLER DISCOUNT (%)
+bot.hears([/✏️ · Edit Reseller Discount \(/i, 'Edit Reseller Discount'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_RESELLER_DISCOUNT' };
+    const prompt =
+        `💼 <b>កែប្រែ Reseller Wholesale Discount (%) ៖</b>\n\n` +
+        `📊 ភាគរយបច្ចុប្បន្ន ៖ <b>-${resellerDiscountPercent}%</b>\n\n` +
+        `✍️ សូមវាយបញ្ចូលភាគរយបញ្ចុះតម្លៃថ្មីសម្រាប់ Reseller (ឧទាហរណ៍ ៖ 15, 20, 25) ៖`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
 // 💵 EDIT MINIMUM DEPOSIT FOR BONUS ($)
 bot.hears(['💵 · Edit Min Bonus Deposit ($)', 'Edit Min Bonus Deposit ($)', 'Edit Min Bonus Deposit'], (ctx) => {
     const userId = ctx.from.id;
@@ -3032,15 +3157,45 @@ bot.hears(['👥 · Manage Admins', 'Manage Admins'], (ctx) => {
 bot.hears(['➕ Add Admin ID'], (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
-    userState[userId] = { step: 'AWAITING_ADD_ADMIN_ID' };
+    userState[userId] = { step: 'AWAITING_ADMIN_ADD_ID' };
     ctx.replyWithHTML(`🆔 <b>សូមផ្ញើ Telegram User ID របស់អ្នកដែលចង់ដាក់ជា Admin ៖</b>\n<i>(ស្នើសុំពី @userinfobot ឬឱ្យគេផ្ញើ /id ទៅ Bot នេះ)</i>`, Markup.keyboard([['👥 · Manage Admins']]).resize());
 });
 
 bot.hears(['➖ Remove Admin ID'], (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
-    userState[userId] = { step: 'AWAITING_REMOVE_ADMIN_ID' };
+    userState[userId] = { step: 'AWAITING_ADMIN_REMOVE_ID' };
     ctx.replyWithHTML(`🆔 <b>សូមផ្ញើ Telegram User ID ដែលចង់ដកចេញពី Admin ៖</b>\n<i>(អាចដកចេញបានតែ ID ដែលបានបន្ថែមតាម Bot ប៉ុណ្ណោះ)</i>`, Markup.keyboard([['👥 · Manage Admins']]).resize());
+});
+
+// 💼 MANAGE RESELLERS (View list / Add / Remove reseller by Telegram ID)
+bot.hears(['💼 · Manage Resellers', 'Manage Resellers'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const listText =
+        `💼 <b>Manage Resellers</b>\n----------------------------------------\n\n` +
+        `🏅 <b>Wholesale Discount ៖</b> -${resellerDiscountPercent}% (កែបានតាម Promotion Settings)\n\n` +
+        `📋 <b>Reseller List ៖</b>\n` +
+        (resellerIdsList.length > 0 ? resellerIdsList.map(id => `• <code>${id}</code>`).join('\n') : 'មិនទាន់មាន Reseller') +
+        `\n\n👇 ជ្រើសរើសសកម្មភាពខាងក្រោម ៖`;
+
+    ctx.replyWithHTML(listText, adminManageResellersKeyboard);
+});
+
+bot.hears(['➕ Add Reseller ID'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_ADD_RESELLER_ID' };
+    ctx.replyWithHTML(`🆔 <b>សូមផ្ញើ Telegram User ID របស់អ្នកដែលចង់ដាក់ជា Reseller ៖</b>\n<i>(ស្នើសុំពី @userinfobot ឬឱ្យគេផ្ញើ /id ទៅ Bot នេះ)</i>`, Markup.keyboard([['💼 · Manage Resellers']]).resize());
+});
+
+bot.hears(['➖ Remove Reseller ID'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_REMOVE_RESELLER_ID' };
+    ctx.replyWithHTML(`🆔 <b>សូមផ្ញើ Telegram User ID ដែលចង់ដកចេញពី Reseller ៖</b>`, Markup.keyboard([['💼 · Manage Resellers']]).resize());
 });
 
 // 🛠️ TOOLS & SYSTEM MENU

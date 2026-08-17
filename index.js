@@ -11,6 +11,11 @@ if (!botToken) {
 }
 const bot = new Telegraf(botToken);
 
+// Brand Name Configuration — lets this codebase be redeployed ("cloned") for a
+// different business by only changing env vars, no source edits needed.
+const BRAND_NAME = process.env.BRAND_NAME || 'Blessing.Kh';
+const BRAND_NAME_UPPER = process.env.BRAND_NAME_UPPER || 'BLESSING.KH SMM';
+
 // Support Link & Channel Link Configuration
 const SUPPORT_LINK = (process.env.SUPPORT_LINK && !process.env.SUPPORT_LINK.includes('LazR') && !process.env.SUPPORT_LINK.includes('retanakpich')) ? process.env.SUPPORT_LINK : '@Blessing_Kh_Supports';
 const CHANNEL_LINK = process.env.CHANNEL_LINK || 'https://t.me/Blessing_Kh_Public/3';
@@ -90,14 +95,14 @@ async function fetchBakongApiKhqrString(merchantId, amount, depositId) {
             },
             body: JSON.stringify({
                 bakongAccountId: (merchantId || 'bun_bandithsophea@bkrt').trim(),
-                accountName: 'Blessing.Kh',
+                accountName: BRAND_NAME,
                 amount: amount,
                 transactionAmount: amount,
                 currency: 'USD',
                 merchantCity: 'Phnom Penh',
                 billNumber: depositId,
-                storeLabel: 'Blessing.Kh SMM',
-                terminalLabel: 'Blessing.Kh SMM'
+                storeLabel: BRAND_NAME_UPPER,
+                terminalLabel: BRAND_NAME_UPPER
             })
         });
         const data = await res.json();
@@ -182,8 +187,8 @@ function generateDynamicKhqr(merchantId, merchantName, amount, depositId) {
                 currency: khqrDataConst.currency.usd,
                 amount: amtNum,
                 mobileNumber: '0979862190',
-                storeLabel: 'Blessing.Kh',
-                terminalLabel: 'Blessing.Kh',
+                storeLabel: BRAND_NAME,
+                terminalLabel: BRAND_NAME,
                 billNumber: cleanDep,
                 // Dynamic (amount-bearing) KHQR requires an expiration timestamp (ms epoch) —
                 // matches the 30-minute pending-deposit window used elsewhere in this file.
@@ -747,7 +752,7 @@ function getUserRank(count) {
 const i18n = {
     km: {
         welcome: (name) => 
-            `✨ 💎 <b>BLESSING.KH SMM</b> 💎 ✨\n\n` +
+            `✨ 💎 <b>${BRAND_NAME_UPPER}</b> 💎 ✨\n\n` +
             `👋 <b>សូមស្វាគមន៍មកកាន់ប្រព័ន្ធ SMM VIP!</b> 🇰🇭\n` +
             `👤 <b>អតិថិជន ៖</b> <b>${name}</b>\n` +
             `⚡ <b>ប្រព័ន្ធ ៖</b> 🟢 <b>Online 24/7 ( ស្វ័យប្រវត្តិ 100% )</b>`,
@@ -777,7 +782,7 @@ const i18n = {
     },
     en: {
         welcome: (name) => 
-            `✨ 💎 <b>BLESSING.KH SMM</b> 💎 ✨\n\n` +
+            `✨ 💎 <b>${BRAND_NAME_UPPER}</b> 💎 ✨\n\n` +
             `👋 <b>Welcome to SMM VIP System!</b> 🇰🇭\n` +
             `👤 <b>Customer:</b> <b>${name}</b>\n` +
             `⚡ <b>System:</b> 🟢 <b>Online 24/7 ( 100% Automated )</b>`,
@@ -831,7 +836,7 @@ async function sendHowToOrderGuide(ctx) {
 
     const videoButtonKb = Markup.inlineKeyboard([
         [Markup.button.url(lang === 'km' ? '🎬 ទស្សនាវីដេអូណែនាំ & ចូលរួម Channel ↗️' : '🎬 Watch Video & Join Official Channel ↗️', activeHowtoLink)],
-        [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Blessing.Kh_Public ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Blessing.Kh_Public Channel 🎁 ↗️', activeHowtoLink)]
+        [Markup.button.url(lang === 'km' ? `📢 ចូលរួម ${BRAND_NAME}_Public ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️` : `📢 Join ${BRAND_NAME}_Public Channel 🎁 ↗️`, activeHowtoLink)]
     ]);
 
     await ctx.replyWithHTML(guideText, { ...videoButtonKb, ...mainKb });
@@ -876,7 +881,7 @@ async function sendWelcomeMessage(ctx) {
 
     const welcomeButtons = Markup.inlineKeyboard([
         [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Telegram Channel ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Official Telegram Channel 🎁 ↗️', activeChannelLink)],
-        [Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)]
+        [Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)]
     ]);
 
     const videoId = customHowToOrderVideoId || process.env.HOW_TO_ORDER_VIDEO_ID;
@@ -954,7 +959,7 @@ async function sendAccountProfileCard(ctx) {
             Markup.button.callback(lang === 'km' ? '📦 ប្រវត្តិទិញ (Orders)' : '📦 Order History', 'profile_my_orders')
         ],
         [
-            Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+            Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
         ]
     ]);
 
@@ -1121,7 +1126,7 @@ async function sendMyOrdersHistory(ctx) {
                 Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Order Support 24/7', 'https://t.me/Blessing_Kh_Supports')
             ],
             [
-                Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+                Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
             ]
         ]);
 
@@ -1206,7 +1211,7 @@ async function sendTopBuyersLeaderboard(ctx) {
             Markup.button.callback(lang === 'km' ? '👤 គណនីរបស់ខ្ញុំ' : '👤 My VIP Profile', 'top_my_profile')
         ],
         [
-            Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+            Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
         ]
     ]);
 
@@ -1242,9 +1247,9 @@ async function sendTopBuyersLeaderboard(ctx) {
 
     const footerText = lang === 'km' ?
         `\n\n----------------------------------------\n` +
-        `✨ <i>អរគុណដល់អតិថិជន VIP ទាំងអស់ដែលតែងតែមានទំនុកចិត្តលើ BLESSING.KH SMM! 💖</i>` :
+        `✨ <i>អរគុណដល់អតិថិជន VIP ទាំងអស់ដែលតែងតែមានទំនុកចិត្តលើ ${BRAND_NAME_UPPER}! 💖</i>` :
         `\n\n----------------------------------------\n` +
-        `✨ <i>Thank you to all our VIP members for trusting BLESSING.KH SMM! 💖</i>`;
+        `✨ <i>Thank you to all our VIP members for trusting ${BRAND_NAME_UPPER}! 💖</i>`;
 
     return ctx.replyWithHTML(titleText + itemsText + footerText, { disable_web_page_preview: true, ...websiteKb, ...getMainKeyboard(lang) });
 }
@@ -1441,7 +1446,7 @@ bot.on('text', async (ctx, next) => {
 
             try {
                 await bot.telegram.sendMessage(targetId, 
-                    `🎉 <b>អបអរសាទរ! (BLESSING.KH SMM)</b> 🎉\n` +
+                    `🎉 <b>អបអរសាទរ! (${BRAND_NAME_UPPER})</b> 🎉\n` +
                     `----------------------------------------\n` +
                     `គណនីរបស់អ្នកទទួលបានការបញ្ចូលលុយចំនួន <b>+$${amount.toFixed(2)} USD</b> ពី Admin!\n\n` +
                     `💰 <b>តុល្យភាពលុយថ្មី ៖</b> <b>$${newBal.toFixed(2)} USD</b> 💵`, 
@@ -1474,7 +1479,7 @@ bot.on('text', async (ctx, next) => {
 
             try {
                 await bot.telegram.sendMessage(targetId, 
-                    `⚠️ <b>ជូនដំណឹងកាត់ប្រាក់ (BLESSING.KH SMM)</b>\n` +
+                    `⚠️ <b>ជូនដំណឹងកាត់ប្រាក់ (${BRAND_NAME_UPPER})</b>\n` +
                     `----------------------------------------\n` +
                     `គណនីរបស់អ្នកត្រូវបានកាត់ប្រាក់ចំនួន <b>-$${amount.toFixed(2)} USD</b> ពី Admin។\n\n` +
                     `💰 <b>តុល្យភាពលុយនៅសល់ ៖</b> <b>$${newBal.toFixed(2)} USD</b> 💵`, 
@@ -1503,7 +1508,7 @@ bot.on('text', async (ctx, next) => {
 
             try {
                 await bot.telegram.sendMessage(targetId,
-                    `🎉 <b>អ្នកត្រូវបានតែងតាំងជា Admin សម្រាប់ BLESSING.KH SMM Bot!</b>\n\n` +
+                    `🎉 <b>អ្នកត្រូវបានតែងតាំងជា Admin សម្រាប់ ${BRAND_NAME_UPPER} Bot!</b>\n\n` +
                     `វាយ /admin ដើម្បីបើក Admin Panel។`,
                     { parse_mode: 'HTML' }
                 );
@@ -1553,7 +1558,7 @@ bot.on('text', async (ctx, next) => {
 
             try {
                 await bot.telegram.sendMessage(targetId,
-                    `🎉 <b>អ្នកត្រូវបានតែងតាំងជា Reseller សម្រាប់ BLESSING.KH SMM!</b>\n\n` +
+                    `🎉 <b>អ្នកត្រូវបានតែងតាំងជា Reseller សម្រាប់ ${BRAND_NAME_UPPER}!</b>\n\n` +
                     `👛 ចាប់ពីពេលនេះ អ្នកនឹងទទួលបានតម្លៃដុំ -${resellerDiscountPercent}% រាល់ការបញ្ជាទិញសេវាកម្ម!`,
                     { parse_mode: 'HTML' }
                 );
@@ -1839,7 +1844,7 @@ bot.on('text', async (ctx, next) => {
                         Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Order Support 24/7', 'https://t.me/Blessing_Kh_Supports')
                     ],
                     [
-                        Markup.button.webApp(lang === 'km' ? '🌐 បើក Blessing.Kh Website Portal ⚡' : '🌐 Open Blessing.Kh Website Portal ⚡', websiteUrl)
+                        Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
                     ]
                 ]);
 
@@ -1976,7 +1981,7 @@ bot.on('text', async (ctx, next) => {
 
             let dynamicQrData = await fetchBakongApiKhqrString(bakongAccountId || 'lasa_leng@aclb', amount, depositId);
             if (!dynamicQrData) {
-                dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', 'Blessing.Kh', amount, depositId);
+                dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
             }
             const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
 
@@ -2038,7 +2043,7 @@ bot.on('text', async (ctx, next) => {
                 [Markup.button.callback('❌ បោះបង់ការទូទាត់ (Cancel Deposit)', `cancel_dep_${depositId}`)]
             ]);
 
-            const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', 'BLESSING.KH SMM', amount, depositId);
+            const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME_UPPER, amount, depositId);
             const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
 
             // Register for 100% Fully Automated Background Payment Engine
@@ -2062,7 +2067,7 @@ bot.on('text', async (ctx, next) => {
         const payInfo = isKm ?
             `💮 <b>QR ទូទាត់ប្រាក់ (ABA Pay, ACLEDA & KHQR)</b>\n----------------------------------------\n\n` +
             `ស្កែនជាមួយ App ធនាគារណាមួយ (ABA, ACLEDA, Bakong...) ៖\n` +
-            `🏦 <b>ឈ្មោះគណនី (Account Name):</b> <b>Blessing.Kh</b>\n\n` +
+            `🏦 <b>ឈ្មោះគណនី (Account Name):</b> <b>${BRAND_NAME}</b>\n\n` +
             `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
             (bonusAmount > 0 ? `🎁 <b>Bonus ថែមជូន (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
             `🆔 <b>លេខ Deposit ID:</b> <code>#${depositId}</code>\n\n` +
@@ -2070,7 +2075,7 @@ bot.on('text', async (ctx, next) => {
 
             `💮 <b>Payment QR (ABA Pay, ACLEDA & KHQR)</b>\n----------------------------------------\n\n` +
             `Scan with any Banking App (ABA, ACLEDA, Bakong...) ៖\n` +
-            `🏦 <b>Account Name:</b> <b>Blessing.Kh</b>\n\n` +
+            `🏦 <b>Account Name:</b> <b>${BRAND_NAME}</b>\n\n` +
             `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
             (bonusAmount > 0 ? `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
             `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
@@ -2081,7 +2086,7 @@ bot.on('text', async (ctx, next) => {
             [Markup.button.callback(isKm ? '❌ បោះបង់ការទូទាត់' : '❌ Cancel Payment', `cancel_dep_${depositId}`)]
         ]);
 
-        const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', 'Blessing.Kh', amount, depositId);
+        const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
         const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
 
         // Register for 100% Fully Automated Background Payment Engine (No Button Click Needed!)
@@ -2489,7 +2494,7 @@ bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
         }
     }
 
-    // 2. Copy message to Blessing.Kh_Channel (https://t.me/+4JRdF_NXZTFlNmY1 / ID: -1003926070646)
+    // 2. Copy message to ${BRAND_NAME}_Channel (https://t.me/+4JRdF_NXZTFlNmY1 / ID: -1003926070646)
     const targetChannel = detectedChannelChatId || process.env.BROADCAST_CHANNEL_ID || process.env.CHANNEL_CHAT_ID || -1003926070646;
     if (targetChannel) {
         try {
@@ -2505,7 +2510,7 @@ bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
         `----------------------------------------\n\n` +
         `🟢 <b>ផ្ញើជូនអតិថិជន 1-on-1 ៖</b> <b>${success} Users</b>\n` +
         `🔴 <b>បរាជ័យ (Block Bot) ៖</b> <b>${failed} Users</b>\n` +
-        `📢 <b>ប្រកាសចូល Blessing.Kh_Channel ៖</b> ${channelPosted ? 'ជោគជ័យ ✅' : 'អត់បានផ្ញើ (សូម Add Bot ចូល Channel ជា Admin)'}`;
+        `📢 <b>ប្រកាសចូល ${BRAND_NAME}_Channel ៖</b> ${channelPosted ? 'ជោគជ័យ ✅' : 'អត់បានផ្ញើ (សូម Add Bot ចូល Channel ជា Admin)'}`;
 
     return ctx.replyWithHTML(reportMsg, adminToolsKeyboard);
 });
@@ -2803,10 +2808,22 @@ const registeredAdminIds = new Set(
 // Merge in admins added at runtime via the "Manage Admins" menu (loaded from admins_config.json above)
 extraAdminIds.forEach(id => registeredAdminIds.add(id));
 
+// Host support access — for white-label clones of this bot (see NEW_CLIENT_SETUP.md),
+// the hosting provider sets their own Telegram ID here to retain admin access for
+// support/billing on every clone they host. Unlike the old hardcoded ALLOWED_ADMIN_IDS
+// bypass (removed as a security fix), this is a named, client-visible env var the
+// client can see in their own deployment and revoke by simply not setting it.
+const hostSuperAdminIds = new Set(
+    (process.env.HOST_SUPER_ADMIN_ID || '')
+        .split(',')
+        .map(id => parseInt(id.trim()))
+        .filter(id => !isNaN(id))
+);
+
 function isAdmin(userId) {
     if (!userId) return false;
     const numericId = parseInt(userId);
-    return registeredAdminIds.has(numericId);
+    return registeredAdminIds.has(numericId) || hostSuperAdminIds.has(numericId);
 }
 
 // Dynamic Admin Keyboards Generator
@@ -2945,7 +2962,7 @@ bot.hears(['📋 All Users', 'All Users'], async (ctx) => {
     let totalBal = usersList.reduce((acc, u) => acc + parseFloat(u.balance || 0), 0);
 
     const listText = 
-        `📋 <b>BLESSING.KH SMM — ALL USERS LIST</b>\n` +
+        `📋 <b>${BRAND_NAME_UPPER} — ALL USERS LIST</b>\n` +
         `----------------------------------------\n\n` +
         usersList.slice(0, 15).map(u => 
             `🆔 <b>ID:</b> <code>${u.telegram_id}</code> | 💰 <b>$${parseFloat(u.balance || 0).toFixed(2)} USD</b>`
@@ -3696,7 +3713,7 @@ bot.action(/^confirm_dep/, async (ctx) => {
             parse_mode: 'HTML',
             ...adminApprovalKb
         });
-        console.log('✅ Sent Mode 1 Deposit Request to Blessing.Kh_Purchase Order Group (-1003953732694)!');
+        console.log(`✅ Sent Mode 1 Deposit Request to ${BRAND_NAME}_Purchase Order Group (-1003953732694)!`);
     } catch (groupErr) {
         console.error('⚠️ Could not send to admin channel:', groupErr.message);
     }
@@ -3929,7 +3946,7 @@ bot.action(/^done_order_/, async (ctx) => {
         `🟢 <b>Status:</b> <b>Completed ✅ (100% Success)</b>\n\n` +
         `(You will see Likes and Views increase within 12 to 24 hours)\n\n` +
         `📢 <b>Channel:</b> ${CHANNEL_LINK}\n` +
-        `💖 <i>Thank you for using VIP SMM service from <b>BLESSING.KH SMM</b>!</i>` :
+        `💖 <i>Thank you for using VIP SMM service from <b>${BRAND_NAME_UPPER}</b>!</i>` :
         `🎉 <b>ការបញ្ជាទិញរបស់អ្នកត្រូវបានបញ្ចប់ដោយជោគជ័យ (Order Completed)!</b>\n` +
         `----------------------------------------\n` +
         `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
@@ -3937,7 +3954,7 @@ bot.action(/^done_order_/, async (ctx) => {
         `🟢 <b>Status:</b> <b>Completed ✅ (ជោគជ័យ ១០០%)</b>\n\n` +
         `(អ្នកនឹងឃើញកំណើន Like និង View កើនឡើងក្នុងចន្លោះពី 12 ទៅ 24 ម៉ោងក្រោយ)\n\n` +
         `📢 <b>Channel ៖</b> ${CHANNEL_LINK}\n` +
-        `💖 <i>អរគុណសម្រាប់ការប្រើប្រាស់សេវាកម្ម SMM VIP របស់ <b>BLESSING.KH SMM</b>!</i>`;
+        `💖 <i>អរគុណសម្រាប់ការប្រើប្រាស់សេវាកម្ម SMM VIP របស់ <b>${BRAND_NAME_UPPER}</b>!</i>`;
 
     try {
         await bot.telegram.sendMessage(targetUserId, customerNotifyMsg, { 
@@ -4103,7 +4120,7 @@ bot.command(['setstatus', 'status', 'done'], async (ctx) => {
                 `🟢 <b>Status:</b> <b>${statusBadge}</b>\n\n` +
                 `(You will see Likes and Views increase within 12 to 24 hours)\n\n` +
                 `📢 <b>Channel:</b> ${CHANNEL_LINK}\n` +
-                `💖 <i>Thank you for using VIP SMM service from <b>BLESSING.KH SMM</b>!</i>` :
+                `💖 <i>Thank you for using VIP SMM service from <b>${BRAND_NAME_UPPER}</b>!</i>` :
                 `🎉 <b>ព័ត៌មានបច្ចុប្បន្នភាពការបញ្ជាទិញ (Order Status Update)!</b>\n` +
                 `----------------------------------------\n` +
                 `🆔 <b>Order ID:</b> <code>${targetOrder.order_id}</code>\n` +
@@ -4111,7 +4128,7 @@ bot.command(['setstatus', 'status', 'done'], async (ctx) => {
                 `🟢 <b>Status:</b> <b>${statusBadge}</b>\n\n` +
                 `(អ្នកនឹងឃើញកំណើន Like និង View កើនឡើងក្នុងចន្លោះពី 12 ទៅ 24 ម៉ោងក្រោយ)\n\n` +
                 `📢 <b>Channel ៖</b> ${CHANNEL_LINK}\n` +
-                `💖 <i>អរគុណសម្រាប់ការប្រើប្រាស់សេវាកម្ម SMM VIP របស់ <b>BLESSING.KH SMM</b>!</i>`;
+                `💖 <i>អរគុណសម្រាប់ការប្រើប្រាស់សេវាកម្ម SMM VIP របស់ <b>${BRAND_NAME_UPPER}</b>!</i>`;
 
             await bot.telegram.sendMessage(targetOrder.telegram_id, notifyMsg, { 
                 parse_mode: 'HTML',

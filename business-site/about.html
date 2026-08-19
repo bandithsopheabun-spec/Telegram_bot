@@ -36,13 +36,29 @@
     background: rgba(11,15,25,0.9);
     backdrop-filter: blur(8px);
     z-index: 10;
+    flex-wrap: wrap;
+    gap: 12px;
   }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.15rem; }
   .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  nav { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
   nav a { color: var(--muted); text-decoration: none; margin-left: 20px; font-size: 0.92rem; }
   nav a:hover { color: var(--text); }
   nav a.cta { color: var(--bg); background: linear-gradient(135deg, var(--accent), var(--accent-2)); padding: 8px 16px; border-radius: 999px; font-weight: 600; }
   nav a.cta:hover { opacity: 0.9; color: var(--bg); }
+  #btnLangToggle {
+    margin-left: 20px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 7px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  #btnLangToggle:hover { border-color: var(--accent); }
   main { max-width: 880px; margin: 0 auto; padding: 0 24px 80px; }
   .hero { padding: 64px 0 40px; text-align: center; }
   .hero h1 { font-size: 2.1rem; margin: 0 0 12px; }
@@ -64,8 +80,6 @@
   ol li, ul li { margin-bottom: 8px; }
   strong { color: var(--text); }
   footer { border-top: 1px solid var(--border); padding: 28px 24px; text-align: center; color: var(--muted); font-size: 0.85rem; }
-  .toc { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
-  .toc a { font-size: 0.85rem; }
 </style>
 </head>
 <body>
@@ -73,107 +87,108 @@
 <header>
   <div class="brand"><span class="dot"></span> Blessing.Kh</div>
   <nav>
-    <a href="#about">About</a>
-    <a href="#services">Services</a>
-    <a href="#contact">Contact</a>
-    <a href="#terms">Terms</a>
-    <a href="#privacy">Privacy</a>
-    <a href="#refund">Refund</a>
-    <a href="https://blessingkh.vip" class="cta">Order Now →</a>
+    <a href="#about" data-i18n="nav_about">About</a>
+    <a href="#services" data-i18n="nav_services">Services</a>
+    <a href="#contact" data-i18n="nav_contact">Contact</a>
+    <a href="#terms" data-i18n="nav_terms">Terms</a>
+    <a href="#privacy" data-i18n="nav_privacy">Privacy</a>
+    <a href="#refund" data-i18n="nav_refund">Refund</a>
+    <a href="https://blessingkh.vip" class="cta" data-i18n="nav_order">Order Now →</a>
+    <button id="btnLangToggle" type="button">🇬🇧 English</button>
   </nav>
 </header>
 
 <main>
   <section class="hero">
     <h1>✨ Blessing.Kh SMM</h1>
-    <p>Social media marketing services for TikTok, Telegram and Facebook — likes, views and followers, delivered through an automated Telegram-based ordering system with in-app wallet and KHQR payment.</p>
+    <p data-i18n="hero_desc">Social media marketing services for TikTok, Telegram and Facebook — likes, views and followers, delivered through an automated Telegram-based ordering system with in-app wallet and KHQR payment.</p>
     <div class="badges">
-      <span class="badge">🇰🇭 Operating in Cambodia</span>
-      <span class="badge">🤖 Telegram-based ordering</span>
-      <span class="badge">💳 Bakong KHQR payments</span>
+      <span class="badge" data-i18n="badge_country">🇰🇭 Operating in Cambodia</span>
+      <span class="badge" data-i18n="badge_telegram">🤖 Telegram-based ordering</span>
+      <span class="badge" data-i18n="badge_khqr">💳 Bakong KHQR payments</span>
     </div>
-    <a href="https://blessingkh.vip" class="hero-cta">🛒 Visit Ordering Website (blessingkh.vip)</a>
+    <a href="https://blessingkh.vip" class="hero-cta" data-i18n="hero_cta">🛒 Visit Ordering Website (blessingkh.vip)</a>
   </section>
 
   <section id="about">
-    <h2>About Us / អំពីយើងខ្ញុំ</h2>
-    <p>
+    <h2 data-i18n="about_h2">About Us</h2>
+    <p data-i18n="about_p1">
       <strong>Blessing.Kh</strong> is a social media marketing (SMM) reselling service based in Cambodia,
       operating through a Telegram bot and companion web ordering portal. We provide engagement services
       (likes, views, followers) for TikTok, Telegram, and Facebook to individual and business customers
       who want to grow their social media presence.
     </p>
-    <p>
+    <p data-i18n="about_p2">
       Customers top up an in-app wallet using Bakong KHQR (and other supported local payment methods),
       then place orders for the service package of their choice directly through the bot or website. Orders
       are processed and fulfilled by our support team, with order status and history available to customers
       at all times.
     </p>
     <dl>
-      <dt>Business Name</dt><dd>Blessing.Kh</dd>
-      <dt>Business Type</dt><dd id="bizRegNumber">Individual Operator (Sole Proprietor)</dd>
-      <dt>Location</dt><dd id="bizAddress">Prey Veng, Cambodia</dd>
-      <dt>Service Category</dt><dd>Social Media Marketing (SMM) — digital engagement services</dd>
-      <dt>Operating Country</dt><dd>Cambodia</dd>
-      <dt>Website</dt><dd><a href="https://blessingkh.vip" target="_blank" rel="noopener">blessingkh.vip</a></dd>
-      <dt>Ordering Channels</dt><dd>Telegram Bot (@BlessingKhV1_Bot) + Web Ordering Portal</dd>
+      <dt data-i18n="biz_name_label">Business Name</dt><dd>Blessing.Kh</dd>
+      <dt data-i18n="biz_type_label">Business Type</dt><dd id="bizRegNumber" data-i18n="biz_type_value">Individual Operator (Sole Proprietor)</dd>
+      <dt data-i18n="biz_location_label">Location</dt><dd id="bizAddress">Prey Veng, Cambodia</dd>
+      <dt data-i18n="biz_category_label">Service Category</dt><dd data-i18n="biz_category_value">Social Media Marketing (SMM) — digital engagement services</dd>
+      <dt data-i18n="biz_country_label">Operating Country</dt><dd data-i18n="biz_country_value">Cambodia</dd>
+      <dt data-i18n="biz_website_label">Website</dt><dd><a href="https://blessingkh.vip" target="_blank" rel="noopener">blessingkh.vip</a></dd>
+      <dt data-i18n="biz_channels_label">Ordering Channels</dt><dd data-i18n="biz_channels_value">Telegram Bot (@BlessingKhV1_Bot) + Web Ordering Portal</dd>
     </dl>
   </section>
 
   <section id="services">
-    <h2>Services / សេវាកម្ម</h2>
+    <h2 data-i18n="services_h2">Services</h2>
     <div class="grid">
       <div class="card">
-        <h3>❤️ TikTok Likes & Views</h3>
-        <p>Likes and views packages for TikTok videos, Khmer-market focused.</p>
+        <h3 data-i18n="svc1_h3">❤️ TikTok Likes & Views</h3>
+        <p data-i18n="svc1_p">Likes and views packages for TikTok videos, Khmer-market focused.</p>
       </div>
       <div class="card">
-        <h3>👀 TikTok Video Views</h3>
-        <p>View-count growth packages for TikTok content.</p>
+        <h3 data-i18n="svc2_h3">👀 TikTok Video Views</h3>
+        <p data-i18n="svc2_p">View-count growth packages for TikTok content.</p>
       </div>
       <div class="card">
-        <h3>👥 TikTok Followers</h3>
-        <p>Follower growth packages for TikTok accounts.</p>
+        <h3 data-i18n="svc3_h3">👥 TikTok Followers</h3>
+        <p data-i18n="svc3_p">Follower growth packages for TikTok accounts.</p>
       </div>
       <div class="card">
-        <h3>👛 Wallet & Top-up</h3>
-        <p>In-app wallet funded via Bakong KHQR, with promotional top-up bonuses.</p>
+        <h3 data-i18n="svc4_h3">👛 Wallet & Top-up</h3>
+        <p data-i18n="svc4_p">In-app wallet funded via Bakong KHQR, with promotional top-up bonuses.</p>
       </div>
     </div>
   </section>
 
   <section id="contact">
-    <h2>Contact Us / ទំនាក់ទំនង</h2>
+    <h2 data-i18n="contact_h2">Contact Us</h2>
     <dl>
-      <dt>Telegram Support</dt><dd><a href="https://t.me/Blessing_Kh_Supports" target="_blank" rel="noopener">@Blessing_Kh_Supports</a></dd>
-      <dt>Official Channel</dt><dd><a href="https://t.me/Blessing_Kh_Public" target="_blank" rel="noopener">Blessing.Kh_Public</a></dd>
-      <dt>Support Hours</dt><dd>24/7, via Telegram</dd>
+      <dt data-i18n="contact_telegram_label">Telegram Support</dt><dd><a href="https://t.me/Blessing_Kh_Supports" target="_blank" rel="noopener">@Blessing_Kh_Supports</a></dd>
+      <dt data-i18n="contact_channel_label">Official Channel</dt><dd><a href="https://t.me/Blessing_Kh_Public" target="_blank" rel="noopener">Blessing.Kh_Public</a></dd>
+      <dt data-i18n="contact_hours_label">Support Hours</dt><dd data-i18n="contact_hours_value">24/7, via Telegram</dd>
     </dl>
   </section>
 
   <section id="terms">
-    <h2>Terms &amp; Conditions / លក្ខខណ្ឌប្រើប្រាស់</h2>
-    <p>By placing an order or funding your wallet with Blessing.Kh, you agree to the following:</p>
+    <h2 data-i18n="terms_h2">Terms &amp; Conditions</h2>
+    <p data-i18n="terms_intro">By placing an order or funding your wallet with Blessing.Kh, you agree to the following:</p>
     <ol>
-      <li>Do not change your account username while an order is being processed.</li>
-      <li>Do not set your account to private while an order is being processed.</li>
-      <li>Submitting an incorrect link for an order is the customer's responsibility and is not eligible for a refund.</li>
-      <li>The account/content submitted for an order must belong to a person aged 18 or older.</li>
-      <li>We do not accept orders for content involving tobacco, vaping, alcohol, weapons, graphic violence, political material, or adult (18+) content.</li>
-      <li>Wallet balances are non-transferable between Telegram accounts.</li>
-      <li>We reserve the right to decline or cancel any order that violates these terms, with a refund to the customer's wallet where applicable.</li>
+      <li data-i18n="terms_li1">Do not change your account username while an order is being processed.</li>
+      <li data-i18n="terms_li2">Do not set your account to private while an order is being processed.</li>
+      <li data-i18n="terms_li3">Submitting an incorrect link for an order is the customer's responsibility and is not eligible for a refund.</li>
+      <li data-i18n="terms_li4">The account/content submitted for an order must belong to a person aged 18 or older.</li>
+      <li data-i18n="terms_li5">We do not accept orders for content involving tobacco, vaping, alcohol, weapons, graphic violence, political material, or adult (18+) content.</li>
+      <li data-i18n="terms_li6">Wallet balances are non-transferable between Telegram accounts.</li>
+      <li data-i18n="terms_li7">We reserve the right to decline or cancel any order that violates these terms, with a refund to the customer's wallet where applicable.</li>
     </ol>
   </section>
 
   <section id="privacy">
-    <h2>Privacy Policy / គោលការណ៍ភាពឯកជន</h2>
-    <p>We collect only the information necessary to operate the service:</p>
+    <h2 data-i18n="privacy_h2">Privacy Policy</h2>
+    <p data-i18n="privacy_intro">We collect only the information necessary to operate the service:</p>
     <ul>
-      <li><strong>Telegram account information</strong> (numeric user ID, username, first name) — used to identify your account, wallet balance, and order history.</li>
-      <li><strong>Order details</strong> (target link, package, price) — used solely to fulfil your order.</li>
-      <li><strong>Payment/deposit records</strong> (amount, timestamp, status) — used to credit your wallet and for our own accounting.</li>
+      <li data-i18n="privacy_li1"><strong>Telegram account information</strong> (numeric user ID, username, first name) — used to identify your account, wallet balance, and order history.</li>
+      <li data-i18n="privacy_li2"><strong>Order details</strong> (target link, package, price) — used solely to fulfil your order.</li>
+      <li data-i18n="privacy_li3"><strong>Payment/deposit records</strong> (amount, timestamp, status) — used to credit your wallet and for our own accounting.</li>
     </ul>
-    <p>
+    <p data-i18n="privacy_p2">
       We do not sell or share customer information with third parties, except where required to process a
       payment (e.g. with Bakong/NBC's payment verification systems) or where required by law. Data is stored
       in a secured database and is not publicly accessible.
@@ -181,19 +196,128 @@
   </section>
 
   <section id="refund">
-    <h2>Refund Policy / គោលការណ៍សងប្រាក់វិញ</h2>
+    <h2 data-i18n="refund_h2">Refund Policy</h2>
     <ul>
-      <li>Deposits credited to your wallet in error, or duplicate deposits, will be corrected/refunded to your wallet upon verification by our support team.</li>
-      <li>Orders that have already started processing are not eligible for a refund, except where our support team cancels the order (e.g. due to an invalid/incorrect link), in which case the order amount is returned to your wallet balance.</li>
-      <li>Wallet balance is not withdrawable to a bank account or cash — it may only be used to place orders on Blessing.Kh.</li>
-      <li>To request a refund review, contact <a href="https://t.me/Blessing_Kh_Supports" target="_blank" rel="noopener">@Blessing_Kh_Supports</a> with your Order ID or Deposit ID.</li>
+      <li data-i18n="refund_li1">Deposits credited to your wallet in error, or duplicate deposits, will be corrected/refunded to your wallet upon verification by our support team.</li>
+      <li data-i18n="refund_li2">Orders that have already started processing are not eligible for a refund, except where our support team cancels the order (e.g. due to an invalid/incorrect link), in which case the order amount is returned to your wallet balance.</li>
+      <li data-i18n="refund_li3">Wallet balance is not withdrawable to a bank account or cash — it may only be used to place orders on Blessing.Kh.</li>
+      <li data-i18n="refund_li4">To request a refund review, contact <a href="https://t.me/Blessing_Kh_Supports" target="_blank" rel="noopener">@Blessing_Kh_Supports</a> with your Order ID or Deposit ID.</li>
     </ul>
   </section>
 </main>
 
-<footer>
+<footer data-i18n="footer_text">
   © 2026 Blessing.Kh. All rights reserved. · Operated in Cambodia · Contact: <a href="https://t.me/Blessing_Kh_Supports">@Blessing_Kh_Supports</a>
 </footer>
+
+<script>
+const I18N = {
+  km: {
+    nav_about: 'អំពីយើងខ្ញុំ', nav_services: 'សេវាកម្ម', nav_contact: 'ទំនាក់ទំនង',
+    nav_terms: 'លក្ខខណ្ឌ', nav_privacy: 'ភាពឯកជន', nav_refund: 'សងប្រាក់វិញ', nav_order: '🛒 បញ្ជាទិញឥឡូវនេះ →',
+    hero_desc: 'សេវាកម្មទីផ្សារបណ្តាញសង្គមសម្រាប់ TikTok, Telegram និង Facebook — Like, View, Follower ដឹកជញ្ជូនតាមប្រព័ន្ធ Telegram Bot ស្វ័យប្រវត្តិ ជាមួយកាបូបលុយក្នុងកម្មវិធី និងការទូទាត់ KHQR។',
+    badge_country: '🇰🇭 ដំណើរការនៅកម្ពុជា', badge_telegram: '🤖 កម្មង់តាម Telegram', badge_khqr: '💳 ទូទាត់ Bakong KHQR',
+    hero_cta: '🛒 ចូលទស្សនា Website បញ្ជាទិញ (blessingkh.vip)',
+    about_h2: 'អំពីយើងខ្ញុំ',
+    about_p1: '<strong>Blessing.Kh</strong> ជាសេវាកម្មទីផ្សារបណ្តាញសង្គម (SMM) ស្ថិតនៅកម្ពុជា ដំណើរការតាមរយៈ Telegram Bot និង Website ជំនួយ។ យើងផ្តល់សេវាកម្មបង្កើនចំណាប់អារម្មណ៍ (Like, View, Follower) សម្រាប់ TikTok, Telegram, និង Facebook ដល់អតិថិជនបុគ្គល និងអាជីវកម្មដែលចង់បង្កើនវត្តមានលើបណ្តាញសង្គម។',
+    about_p2: 'អតិថិជនបញ្ចូលលុយចូលកាបូបលុយក្នុងកម្មវិធីតាមរយៈ Bakong KHQR (និងវិធីទូទាត់ក្នុងស្រុកផ្សេងទៀត) រួចធ្វើការបញ្ជាទិញកញ្ចប់សេវាកម្មដែលចង់បានដោយផ្ទាល់តាមរយៈ Bot ឬ Website។ ការបញ្ជាទិញត្រូវបានដំណើរការ និងបំពេញដោយក្រុមការងារជំនួយរបស់យើង ដោយអតិថិជនអាចមើលស្ថានភាព និងប្រវត្តិបញ្ជាទិញបានគ្រប់ពេល។',
+    biz_name_label: 'ឈ្មោះអាជីវកម្ម', biz_type_label: 'ប្រភេទអាជីវកម្ម', biz_type_value: 'អ្នកប្រកបអាជីវកម្មផ្ទាល់ខ្លួន (Individual Operator)',
+    biz_location_label: 'ទីតាំង', biz_category_label: 'ប្រភេទសេវាកម្ម', biz_category_value: 'ទីផ្សារបណ្តាញសង្គម (SMM) — សេវាកម្មបង្កើនចំណាប់អារម្មណ៍ឌីជីថល',
+    biz_country_label: 'ប្រទេសដំណើរការ', biz_country_value: 'កម្ពុជា', biz_website_label: 'Website', biz_channels_label: 'ប្រព័ន្ធកម្មង់',
+    biz_channels_value: 'Telegram Bot (@BlessingKhV1_Bot) + Website បញ្ជាទិញ',
+    services_h2: 'សេវាកម្ម', svc1_h3: '❤️ Like & View TikTok', svc1_p: 'កញ្ចប់ Like និង View សម្រាប់វីដេអូ TikTok ជាក់លាក់ទីផ្សារខ្មែរ។',
+    svc2_h3: '👀 View វីដេអូ TikTok', svc2_p: 'កញ្ចប់បង្កើនចំនួន View សម្រាប់មាតិកា TikTok។',
+    svc3_h3: '👥 Follower TikTok', svc3_p: 'កញ្ចប់បង្កើនចំនួន Follower សម្រាប់គណនី TikTok។',
+    svc4_h3: '👛 កាបូបលុយ & បញ្ចូលលុយ', svc4_p: 'កាបូបលុយក្នុងកម្មវិធីបញ្ចូលលុយតាម Bakong KHQR ជាមួយ Bonus ពិសេស។',
+    contact_h2: 'ទំនាក់ទំនង', contact_telegram_label: 'ជំនួយតាម Telegram', contact_channel_label: 'Channel ផ្លូវការ',
+    contact_hours_label: 'ម៉ោងជំនួយ', contact_hours_value: '២៤/៧ តាមរយៈ Telegram',
+    terms_h2: 'លក្ខខណ្ឌប្រើប្រាស់',
+    terms_intro: 'ការធ្វើការបញ្ជាទិញ ឬបញ្ចូលលុយចូលកាបូបលុយជាមួយ Blessing.Kh មានន័យថាបងយល់ព្រមតាមលក្ខខណ្ឌខាងក្រោម៖',
+    terms_li1: 'ហាមផ្លាស់ប្តូរ Username គណនីខណៈពេលកំពុងដំណើរការការបញ្ជាទិញ។',
+    terms_li2: 'ហាមប្តូរគណនីទៅជា Private ខណៈពេលកំពុងដំណើរការការបញ្ជាទិញ។',
+    terms_li3: 'ការផ្ញើ Link មិនត្រឹមត្រូវសម្រាប់ការបញ្ជាទិញ ជាទំនួលខុសត្រូវរបស់អតិថិជន និងមិនមានសិទ្ធិទទួលការសងប្រាក់វិញឡើយ។',
+    terms_li4: 'គណនី/មាតិកាដែលដាក់ស្នើសម្រាប់ការបញ្ជាទិញ ត្រូវតែជារបស់បុគ្គលដែលមានអាយុចាប់ពី ១៨ ឆ្នាំឡើងទៅ។',
+    terms_li5: 'យើងមិនទទួលការបញ្ជាទិញសម្រាប់មាតិកាទាក់ទងនឹងបារី, ថ្នាំជក់អគ្គិសនី, គ្រឿងស្រវឹង, អាវុធ, ភាពហិង្សា, នយោបាយ ឬមាតិកា 18+ ឡើយ។',
+    terms_li6: 'តុល្យភាពកាបូបលុយមិនអាចផ្ទេររវាងគណនី Telegram ផ្សេងគ្នាបានឡើយ។',
+    terms_li7: 'យើងសូមរក្សាសិទ្ធិបដិសេធ ឬបោះបង់ការបញ្ជាទិញណាមួយដែលបំពានលក្ខខណ្ឌទាំងនេះ ដោយសងប្រាក់ត្រឡប់ទៅកាបូបលុយអតិថិជនតាមករណីសមស្រប។',
+    privacy_h2: 'គោលការណ៍ភាពឯកជន',
+    privacy_intro: 'យើងប្រមូលតែព័ត៌មានចាំបាច់សម្រាប់ដំណើរការសេវាកម្មប៉ុណ្ណោះ៖',
+    privacy_li1: '<strong>ព័ត៌មានគណនី Telegram</strong> (Telegram ID, Username, ឈ្មោះ) — ប្រើសម្រាប់កំណត់អត្តសញ្ញាណគណនី, តុល្យភាព, និងប្រវត្តិបញ្ជាទិញ។',
+    privacy_li2: '<strong>ព័ត៌មានការបញ្ជាទិញ</strong> (Link, កញ្ចប់សេវា, តម្លៃ) — ប្រើសម្រាប់បំពេញការបញ្ជាទិញរបស់អ្នកតែប៉ុណ្ណោះ។',
+    privacy_li3: '<strong>កំណត់ត្រាទូទាត់/បញ្ចូលលុយ</strong> (ចំនួនទឹកប្រាក់, ពេលវេលា, ស្ថានភាព) — ប្រើសម្រាប់បញ្ចូលលុយចូលកាបូបលុយ និងគណនេយ្យផ្ទាល់ខ្លួន។',
+    privacy_p2: 'យើងមិនលក់ ឬចែករំលែកព័ត៌មានអតិថិជនជាមួយភាគីទីបីឡើយ លើកលែងតែចាំបាច់សម្រាប់ដំណើរការទូទាត់ (ឧ. ជាមួយប្រព័ន្ធផ្ទៀងផ្ទាត់ការទូទាត់ Bakong/NBC) ឬតាមការតម្រូវច្បាប់។ ទិន្នន័យត្រូវបានផ្ទុកក្នុង Database មានសុវត្ថិភាព និងមិនអាចចូលមើលជាសាធារណៈបានឡើយ។',
+    refund_h2: 'គោលការណ៍សងប្រាក់វិញ',
+    refund_li1: 'ការបញ្ចូលលុយចូលកាបូបលុយខុសឆ្គង ឬស្ទួន នឹងត្រូវបានកែតម្រូវ/សងវិញចូលកាបូបលុយបន្ទាប់ពីការផ្ទៀងផ្ទាត់ដោយក្រុមការងារជំនួយ។',
+    refund_li2: 'ការបញ្ជាទិញដែលបានចាប់ផ្តើមដំណើរការរួច មិនមានសិទ្ធិសងប្រាក់វិញឡើយ លើកលែងតែក្រុមការងារជំនួយបោះបង់ការបញ្ជាទិញនោះ (ឧ. ដោយសារ Link មិនត្រឹមត្រូវ) ដែលក្នុងករណីនេះ ចំនួនទឹកប្រាក់នឹងត្រូវបានប្រគល់ត្រឡប់ទៅតុល្យភាពកាបូបលុយវិញ។',
+    refund_li3: 'តុល្យភាពកាបូបលុយមិនអាចដកជាប្រាក់ចូលធនាគារ ឬសាច់ប្រាក់បានឡើយ — អាចប្រើបានតែសម្រាប់ធ្វើការបញ្ជាទិញលើ Blessing.Kh ប៉ុណ្ណោះ។',
+    refund_li4: 'ដើម្បីស្នើសុំពិនិត្យការសងប្រាក់វិញ សូមទាក់ទង <a href="https://t.me/Blessing_Kh_Supports" target="_blank" rel="noopener">@Blessing_Kh_Supports</a> ជាមួយលេខ Order ID ឬ Deposit ID របស់អ្នក។',
+    footer_text: '© ២០២៦ Blessing.Kh រក្សាសិទ្ធិគ្រប់យ៉ាង។ ដំណើរការនៅកម្ពុជា · ទំនាក់ទំនង៖ <a href="https://t.me/Blessing_Kh_Supports">@Blessing_Kh_Supports</a>',
+    toggle_btn: '🇬🇧 English'
+  },
+  en: {
+    nav_about: 'About', nav_services: 'Services', nav_contact: 'Contact',
+    nav_terms: 'Terms', nav_privacy: 'Privacy', nav_refund: 'Refund', nav_order: '🛒 Order Now →',
+    hero_desc: 'Social media marketing services for TikTok, Telegram and Facebook — likes, views and followers, delivered through an automated Telegram-based ordering system with in-app wallet and KHQR payment.',
+    badge_country: '🇰🇭 Operating in Cambodia', badge_telegram: '🤖 Telegram-based ordering', badge_khqr: '💳 Bakong KHQR payments',
+    hero_cta: '🛒 Visit Ordering Website (blessingkh.vip)',
+    about_h2: 'About Us',
+    about_p1: '<strong>Blessing.Kh</strong> is a social media marketing (SMM) reselling service based in Cambodia, operating through a Telegram bot and companion web ordering portal. We provide engagement services (likes, views, followers) for TikTok, Telegram, and Facebook to individual and business customers who want to grow their social media presence.',
+    about_p2: 'Customers top up an in-app wallet using Bakong KHQR (and other supported local payment methods), then place orders for the service package of their choice directly through the bot or website. Orders are processed and fulfilled by our support team, with order status and history available to customers at all times.',
+    biz_name_label: 'Business Name', biz_type_label: 'Business Type', biz_type_value: 'Individual Operator (Sole Proprietor)',
+    biz_location_label: 'Location', biz_category_label: 'Service Category', biz_category_value: 'Social Media Marketing (SMM) — digital engagement services',
+    biz_country_label: 'Operating Country', biz_country_value: 'Cambodia', biz_website_label: 'Website', biz_channels_label: 'Ordering Channels',
+    biz_channels_value: 'Telegram Bot (@BlessingKhV1_Bot) + Web Ordering Portal',
+    services_h2: 'Services', svc1_h3: '❤️ TikTok Likes & Views', svc1_p: 'Likes and views packages for TikTok videos, Khmer-market focused.',
+    svc2_h3: '👀 TikTok Video Views', svc2_p: 'View-count growth packages for TikTok content.',
+    svc3_h3: '👥 TikTok Followers', svc3_p: 'Follower growth packages for TikTok accounts.',
+    svc4_h3: '👛 Wallet & Top-up', svc4_p: 'In-app wallet funded via Bakong KHQR, with promotional top-up bonuses.',
+    contact_h2: 'Contact Us', contact_telegram_label: 'Telegram Support', contact_channel_label: 'Official Channel',
+    contact_hours_label: 'Support Hours', contact_hours_value: '24/7, via Telegram',
+    terms_h2: 'Terms &amp; Conditions',
+    terms_intro: "By placing an order or funding your wallet with Blessing.Kh, you agree to the following:",
+    terms_li1: 'Do not change your account username while an order is being processed.',
+    terms_li2: 'Do not set your account to private while an order is being processed.',
+    terms_li3: "Submitting an incorrect link for an order is the customer's responsibility and is not eligible for a refund.",
+    terms_li4: 'The account/content submitted for an order must belong to a person aged 18 or older.',
+    terms_li5: 'We do not accept orders for content involving tobacco, vaping, alcohol, weapons, graphic violence, political material, or adult (18+) content.',
+    terms_li6: 'Wallet balances are non-transferable between Telegram accounts.',
+    terms_li7: 'We reserve the right to decline or cancel any order that violates these terms, with a refund to the customer\'s wallet where applicable.',
+    privacy_h2: 'Privacy Policy',
+    privacy_intro: 'We collect only the information necessary to operate the service:',
+    privacy_li1: "<strong>Telegram account information</strong> (numeric user ID, username, first name) — used to identify your account, wallet balance, and order history.",
+    privacy_li2: "<strong>Order details</strong> (target link, package, price) — used solely to fulfil your order.",
+    privacy_li3: "<strong>Payment/deposit records</strong> (amount, timestamp, status) — used to credit your wallet and for our own accounting.",
+    privacy_p2: "We do not sell or share customer information with third parties, except where required to process a payment (e.g. with Bakong/NBC's payment verification systems) or where required by law. Data is stored in a secured database and is not publicly accessible.",
+    refund_h2: 'Refund Policy',
+    refund_li1: 'Deposits credited to your wallet in error, or duplicate deposits, will be corrected/refunded to your wallet upon verification by our support team.',
+    refund_li2: 'Orders that have already started processing are not eligible for a refund, except where our support team cancels the order (e.g. due to an invalid/incorrect link), in which case the order amount is returned to your wallet balance.',
+    refund_li3: 'Wallet balance is not withdrawable to a bank account or cash — it may only be used to place orders on Blessing.Kh.',
+    refund_li4: 'To request a refund review, contact <a href="https://t.me/Blessing_Kh_Supports" target="_blank" rel="noopener">@Blessing_Kh_Supports</a> with your Order ID or Deposit ID.',
+    footer_text: '© 2026 Blessing.Kh. All rights reserved. · Operated in Cambodia · Contact: <a href="https://t.me/Blessing_Kh_Supports">@Blessing_Kh_Supports</a>',
+    toggle_btn: '🇰🇭 ខ្មែរ'
+  }
+};
+
+let currentLang = localStorage.getItem('blessing_about_lang') || 'km';
+
+function applyLang() {
+  document.documentElement.lang = currentLang;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    const val = I18N[currentLang][key];
+    if (val !== undefined) el.innerHTML = val;
+  });
+  document.getElementById('btnLangToggle').textContent = I18N[currentLang].toggle_btn;
+}
+
+document.getElementById('btnLangToggle').addEventListener('click', () => {
+  currentLang = currentLang === 'km' ? 'en' : 'km';
+  localStorage.setItem('blessing_about_lang', currentLang);
+  applyLang();
+});
+
+applyLang();
+</script>
 
 </body>
 </html>

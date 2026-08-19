@@ -68,7 +68,9 @@ const I18N = {
         cat_likes: '❤️ Like & Views Khmer (ខ្មែរសុទ្ធ)',
         cat_views: '👀 Video Views Khmer',
         cat_followers: '👥 Followers Khmer',
-        lang_toggle_btn: '🇬🇧 English'
+        lang_toggle_btn: '🇬🇧 English',
+        add_home_screen_btn: '📌 បន្ថែមទៅអេក្រង់ដើម (Add to Home Screen)',
+        toast_home_screen_added: '🎉 បានបន្ថែមទៅអេក្រង់ដើមដោយជោគជ័យ!'
     },
     en: {
         login_prompt: 'Log in with Telegram to order services and manage your wallet',
@@ -120,7 +122,9 @@ const I18N = {
         cat_likes: '❤️ Like & Views Khmer',
         cat_views: '👀 Video Views Khmer',
         cat_followers: '👥 Followers Khmer',
-        lang_toggle_btn: '🇰🇭 ខ្មែរ'
+        lang_toggle_btn: '🇰🇭 ខ្មែរ',
+        add_home_screen_btn: '📌 Add to Home Screen',
+        toast_home_screen_added: '🎉 Added to Home Screen successfully!'
     }
 };
 
@@ -174,6 +178,19 @@ async function init() {
     document.getElementById('btnToggleLangLogin').addEventListener('click', () => {
         setLanguage(appState.lang === 'km' ? 'en' : 'km');
     });
+    document.getElementById('btnAddHomeScreen').addEventListener('click', () => {
+        if (window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.addToHomeScreen === 'function') {
+            window.Telegram.WebApp.addToHomeScreen();
+        }
+    });
+    // Telegram fires this event if the user completes the add-to-home-screen
+    // flow (or dismisses/fails it) — hide the button once it's actually added.
+    if (window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.onEvent === 'function') {
+        window.Telegram.WebApp.onEvent('homeScreenAdded', () => {
+            document.getElementById('btnAddHomeScreen').classList.add('hidden');
+            showToast(t('toast_home_screen_added'), 'success');
+        });
+    }
 
     // Already have a valid session? (returning visit — cookie still valid)
     const me = await fetchMe();
@@ -284,6 +301,23 @@ async function enterApp(me) {
     updateUserUi();
     await loadPackages();
     await loadOrderHistory();
+    checkHomeScreenPrompt();
+}
+
+// Telegram Mini App "Add to Home Screen" (Bot API 8.0+) — lets the user pin
+// a shortcut that launches straight into this Mini App. Only relevant when
+// opened from inside Telegram; older Telegram client versions don't have
+// these WebApp methods at all, hence the feature-detection.
+function checkHomeScreenPrompt() {
+    const btn = document.getElementById('btnAddHomeScreen');
+    if (!window.Telegram || !window.Telegram.WebApp || typeof window.Telegram.WebApp.checkHomeScreenStatus !== 'function') {
+        return;
+    }
+    window.Telegram.WebApp.checkHomeScreenStatus((status) => {
+        if (status === 'missed' || status === 'unknown') {
+            btn.classList.remove('hidden');
+        }
+    });
 }
 
 // ================= PROFILE UI =================

@@ -190,6 +190,23 @@ body {
     gap: 0.8rem;
 }
 
+.btn-add-home-screen {
+    margin-top: 0.9rem;
+    width: 100%;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid var(--border-active);
+    color: var(--primary);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--font);
+}
+.btn-add-home-screen:hover {
+    background: rgba(59, 130, 246, 0.2);
+}
+
 .user-avatar {
     width: 48px;
     height: 48px;

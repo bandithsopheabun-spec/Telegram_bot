@@ -182,7 +182,33 @@ async function init() {
         return;
     }
 
+    // Opened from one of the bot's own buttons (Telegram's in-app browser) —
+    // log in silently via WebApp initData instead of the Login Widget, which
+    // Telegram doesn't support rendering inside its own WebView.
+    if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+        window.Telegram.WebApp.ready();
+        const meFromWebApp = await loginViaTelegramWebApp();
+        if (meFromWebApp) {
+            await enterApp(meFromWebApp);
+            return;
+        }
+    }
+
     await showLoginGate();
+}
+
+async function loginViaTelegramWebApp() {
+    try {
+        const res = await fetch('/api/auth/telegram-webapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: window.Telegram.WebApp.initData })
+        });
+        if (!res.ok) return null;
+        return await fetchMe();
+    } catch (e) {
+        return null;
+    }
 }
 
 // ================= AUTH =================

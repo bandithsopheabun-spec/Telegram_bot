@@ -258,6 +258,41 @@ function verifyTelegramLoginData(data) {
     return true;
 }
 
+// Verifies the `initData` string Telegram's WebApp SDK provides when the site
+// is opened from inside Telegram itself (via a button.webApp(...) button) —
+// a different, silent auth path from the Login Widget above, which Telegram
+// does not support rendering inside its own in-app browser (shows "Bot
+// domain invalid" there). Algorithm: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+function verifyTelegramWebAppInitData(initDataStr) {
+    if (!initDataStr) return null;
+    try {
+        const params = new URLSearchParams(initDataStr);
+        const hash = params.get('hash');
+        if (!hash) return null;
+        params.delete('hash');
+
+        const checkString = Array.from(params.keys())
+            .sort()
+            .map(k => `${k}=${params.get(k)}`)
+            .join('\n');
+
+        const secretKey = require('crypto').createHmac('sha256', 'WebAppData').update(botToken).digest();
+        const computedHash = require('crypto').createHmac('sha256', secretKey).update(checkString).digest('hex');
+
+        if (computedHash !== hash) return null;
+
+        const authDate = parseInt(params.get('auth_date'), 10);
+        if (!authDate || (Date.now() / 1000 - authDate) > 86400) return null;
+
+        const userJson = params.get('user');
+        if (!userJson) return null;
+        const user = JSON.parse(userJson);
+        return user && user.id ? user : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // sessionToken -> { telegramId, expiresAt }
 const webSessions = new Map();
 const WEB_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -4371,6 +4406,24 @@ http.createServer(async (req, res) => {
             const telegramId = parseInt(data.id, 10);
             await dbGetUser(telegramId, data.first_name, data.username);
             if (data.username) userLang[telegramId] = userLang[telegramId] || 'km';
+            const token = createWebSession(telegramId);
+            res.setHeader('Set-Cookie', `blessing_session=${token}; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(WEB_SESSION_TTL_MS / 1000)}; Path=/`);
+            return sendJson(res, 200, { ok: true });
+        }
+
+        if (apiPath === '/api/auth/telegram-webapp' && req.method === 'POST') {
+            // Silent login for the site opened via one of the bot's own
+            // button.webApp(...) buttons — the Login Widget above shows
+            // "Bot domain invalid" when rendered inside Telegram's own
+            // in-app browser, so this uses the WebApp SDK's initData instead.
+            const body = await readJsonBody(req);
+            const user = verifyTelegramWebAppInitData(body.initData);
+            if (!user) {
+                return sendJson(res, 401, { error: 'invalid_init_data' });
+            }
+            const telegramId = parseInt(user.id, 10);
+            await dbGetUser(telegramId, user.first_name, user.username);
+            if (user.username) userLang[telegramId] = userLang[telegramId] || 'km';
             const token = createWebSession(telegramId);
             res.setHeader('Set-Cookie', `blessing_session=${token}; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(WEB_SESSION_TTL_MS / 1000)}; Path=/`);
             return sendJson(res, 200, { ok: true });

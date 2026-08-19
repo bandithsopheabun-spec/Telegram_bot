@@ -4397,9 +4397,20 @@ http.createServer(async (req, res) => {
                 balance,
                 orderCount,
                 rank: getUserRank(orderCount),
+                lang: getLang(sessionUserId),
                 isReseller: isReseller(sessionUserId),
                 resellerDiscountPercent: isReseller(sessionUserId) ? resellerDiscountPercent : 0
             });
+        }
+
+        if (apiPath === '/api/me/language' && req.method === 'POST') {
+            // Website language toggle also updates the same preference the bot
+            // itself reads (getLang/dbUpdateLanguage) — one account, one
+            // language setting, consistent across both channels.
+            const body = await readJsonBody(req);
+            const lang = body.lang === 'en' ? 'en' : 'km';
+            await dbUpdateLanguage(sessionUserId, lang);
+            return sendJson(res, 200, { ok: true, lang });
         }
 
         if (apiPath === '/api/packages' && req.method === 'GET') {

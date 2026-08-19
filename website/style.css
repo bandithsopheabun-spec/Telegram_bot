@@ -152,6 +152,23 @@ body {
     font-family: var(--font);
 }
 
+.lang-toggle-login {
+    margin-top: 18px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-sub);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: var(--font);
+}
+.lang-toggle-login:hover {
+    color: var(--text-main);
+    border-color: var(--border-active);
+}
+
 /* MAIN CONTENT CONTAINER */
 .main-content {
     padding: 1rem 1.25rem 3rem;

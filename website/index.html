@@ -22,9 +22,10 @@
         <div class="login-card">
             <div class="brand-logo" style="font-size: 2.5rem;">✨</div>
             <h2 id="loginBrandName">Blessing.Kh</h2>
-            <p>ចូលគណនីតាម Telegram ដើម្បីបញ្ជាទិញ និង គ្រប់គ្រងកាបូបលុយរបស់អ្នក</p>
+            <p data-i18n="login_prompt">ចូលគណនីតាម Telegram ដើម្បីបញ្ជាទិញ និង គ្រប់គ្រងកាបូបលុយរបស់អ្នក</p>
             <div id="telegramLoginContainer"></div>
             <p class="login-hint" id="loginHint"></p>
+            <button class="lang-toggle-login" id="btnToggleLangLogin" type="button">🇬🇧 English</button>
         </div>
     </div>
 
@@ -43,8 +44,9 @@
                 <div class="balance-pill" id="balancePill">
                     <span class="balance-icon">👛</span>
                     <span class="balance-amount" id="userBalance">$0.00</span>
-                    <button class="btn-add-funds" id="btnOpenDeposit">+ ថែមលុយ</button>
+                    <button class="btn-add-funds" id="btnOpenDeposit" data-i18n="add_funds_btn">+ ថែមលុយ</button>
                 </div>
+                <button class="lang-btn" id="btnToggleLang" title="Change Language">🇰🇭 KM</button>
                 <button class="lang-btn" id="btnLogout" title="Logout">🚪</button>
             </div>
         </header>
@@ -60,7 +62,7 @@
                             <h2 class="user-display-name" id="userName">Customer</h2>
                             <span class="rank-badge" id="userRank">🥉 Bronze Member</span>
                         </div>
-                        <p class="user-id-text">ID: <code id="userId">-</code> | 🟢 <span id="statusText">Online 24/7 (ស្វ័យប្រវត្តិ)</span></p>
+                        <p class="user-id-text">ID: <code id="userId">-</code> | 🟢 <span id="statusText" data-i18n="status_online">Online 24/7 (ស្វ័យប្រវត្តិ)</span></p>
                         <p class="user-id-text hidden" id="resellerBadge"></p>
                     </div>
                 </div>
@@ -70,47 +72,47 @@
             <nav class="nav-tabs">
                 <button class="tab-btn active" data-tab="tab-order">
                     <span class="tab-icon">🛒</span>
-                    <span class="tab-label">បញ្ជាទិញសេវា</span>
+                    <span class="tab-label" data-i18n="tab_order">បញ្ជាទិញសេវា</span>
                 </button>
                 <button class="tab-btn" data-tab="tab-deposit">
                     <span class="tab-icon">💳</span>
-                    <span class="tab-label">បញ្ចូលលុយ KHQR</span>
+                    <span class="tab-label" data-i18n="tab_deposit">បញ្ចូលលុយ KHQR</span>
                 </button>
                 <button class="tab-btn" data-tab="tab-history">
                     <span class="tab-icon">📅</span>
-                    <span class="tab-label">ប្រវត្តិទិញ</span>
+                    <span class="tab-label" data-i18n="tab_history">ប្រវត្តិទិញ</span>
                 </button>
                 <button class="tab-btn" data-tab="tab-support">
                     <span class="tab-icon">💬</span>
-                    <span class="tab-label">ជំនួយ & Admin</span>
+                    <span class="tab-label" data-i18n="tab_support">ជំនួយ & Admin</span>
                 </button>
             </nav>
 
             <!-- TAB 1: ORDER SERVICES -->
             <section class="tab-content active" id="tab-order">
                 <div class="section-title">
-                    <h3>1. ជ្រើសរើសបណ្តាញសង្គម (Choose Platform)</h3>
+                    <h3 data-i18n="step1_title">1. ជ្រើសរើសបណ្តាញសង្គម (Choose Platform)</h3>
                 </div>
                 <div class="platform-grid">
                     <div class="platform-card active" data-platform="tiktok">
                         <div class="platform-icon">🎵</div>
                         <div class="platform-title">TikTok Khmer</div>
-                        <div class="platform-sub">ខ្មែរសុទ្ធ 100%</div>
+                        <div class="platform-sub" data-i18n="tiktok_sub">ខ្មែរសុទ្ធ 100%</div>
                     </div>
                     <div class="platform-card" data-platform="telegram">
                         <div class="platform-icon">✈️</div>
                         <div class="platform-title">Telegram</div>
-                        <div class="platform-sub">Coming Soon</div>
+                        <div class="platform-sub" data-i18n="coming_soon">Coming Soon</div>
                     </div>
                     <div class="platform-card" data-platform="facebook">
                         <div class="platform-icon">📘</div>
                         <div class="platform-title">Facebook</div>
-                        <div class="platform-sub">Coming Soon</div>
+                        <div class="platform-sub" data-i18n="coming_soon">Coming Soon</div>
                     </div>
                 </div>
 
                 <div class="section-title">
-                    <h3>2. ជ្រើសរើសប្រភេទសេវាកម្ម (Select Category)</h3>
+                    <h3 data-i18n="step2_title">2. ជ្រើសរើសប្រភេទសេវាកម្ម (Select Category)</h3>
                 </div>
                 <div class="category-selector" id="categorySelector">
                     <!-- Populated dynamically via JS -->
@@ -119,42 +121,42 @@
                 <!-- Order Config Form -->
                 <div class="order-box">
                     <div class="section-title">
-                        <h3>3. ជ្រើសរើសកញ្ចប់តម្លៃ & លីង (Package & Link)</h3>
+                        <h3 data-i18n="step3_title">3. ជ្រើសរើសកញ្ចប់តម្លៃ & លីង (Package & Link)</h3>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">ជ្រើសរើសកញ្ចប់ (Package):</label>
+                        <label class="form-label" data-i18n="package_label">ជ្រើសរើសកញ្ចប់ (Package):</label>
                         <select class="form-select" id="packageSelect">
                             <!-- Options populated dynamically -->
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" id="linkInputLabel">ដាក់លីង (Target Link):</label>
+                        <label class="form-label" id="linkInputLabel" data-i18n="link_label">ដាក់លីង (Target Link):</label>
                         <input type="url" class="form-input" id="targetLinkInput" placeholder="https://www.tiktok.com/@username/video/..." required>
-                        <span class="form-hint" id="linkHint">សូមប្រាកដថា Account ឬ Video របស់អ្នកកំណត់ជា Public</span>
+                        <span class="form-hint" id="linkHint" data-i18n="link_hint">សូមប្រាកដថា Account ឬ Video របស់អ្នកកំណត់ជា Public</span>
                     </div>
 
                     <div class="summary-card">
                         <div class="summary-row">
-                            <span>កញ្ចប់ដែលជ្រើសរើស ៖</span>
+                            <span data-i18n="sum_package_label">កញ្ចប់ដែលជ្រើសរើស ៖</span>
                             <strong id="sumPackageName">--</strong>
                         </div>
                         <div class="summary-row">
-                            <span>តម្លៃសរុប (Total Price) ៖</span>
+                            <span data-i18n="sum_price_label">តម្លៃសរុប (Total Price) ៖</span>
                             <strong class="price-tag" id="sumPrice">$0.00 USD</strong>
                         </div>
                         <div class="summary-row">
-                            <span>តុល្យភាពរបស់អ្នក ៖</span>
+                            <span data-i18n="sum_balance_label">តុល្យភាពរបស់អ្នក ៖</span>
                             <span id="sumBalance">$0.00 USD</span>
                         </div>
                     </div>
 
-                    <div class="alert-banner hidden" id="balanceWarning">
+                    <div class="alert-banner hidden" id="balanceWarning" data-i18n="balance_warning">
                         ⚠️ តុល្យភាពរបស់អ្នកមិនគ្រប់គ្រាន់ឡើយ! សូមចុច "បញ្ចូលលុយ KHQR" ដើម្បីបន្ត។
                     </div>
 
-                    <button class="btn-submit-order" id="btnSubmitOrder">
+                    <button class="btn-submit-order" id="btnSubmitOrder" data-i18n="submit_order_btn">
                         ⚡ បញ្ជាទិញឥឡូវនេះ (Submit Order)
                     </button>
                 </div>
@@ -164,9 +166,9 @@
             <section class="tab-content" id="tab-deposit">
                 <div class="deposit-box">
                     <div class="section-title">
-                        <h3>💳 បញ្ចូលលុយតាម Bakong KHQR (Auto-Paid)</h3>
+                        <h3 data-i18n="deposit_title">💳 បញ្ចូលលុយតាម Bakong KHQR (Auto-Paid)</h3>
                     </div>
-                    <p class="deposit-desc">បញ្ចូលទឹកប្រាក់ចូលកាបូបលុយរបស់អ្នកភ្លាមៗ ដោយស្វ័យប្រវត្តិ ១០០% មិនបាច់រង់ចាំ!</p>
+                    <p class="deposit-desc" data-i18n="deposit_desc">បញ្ចូលទឹកប្រាក់ចូលកាបូបលុយរបស់អ្នកភ្លាមៗ ដោយស្វ័យប្រវត្តិ ១០០% មិនបាច់រង់ចាំ!</p>
 
                     <div class="quick-amounts">
                         <button class="amount-btn active" data-amount="1.99">$1.99</button>
@@ -178,11 +180,11 @@
                     </div>
 
                     <div class="form-group margin-top">
-                        <label class="form-label">ឬបញ្ចូលចំនួនទឹកប្រាក់ផ្សេងទៀត ($ USD):</label>
+                        <label class="form-label" data-i18n="custom_amount_label">ឬបញ្ចូលចំនួនទឹកប្រាក់ផ្សេងទៀត ($ USD):</label>
                         <input type="number" step="0.5" min="1" class="form-input" id="customAmountInput" value="1.99">
                     </div>
 
-                    <button class="btn-generate-qr" id="btnGenerateQr">
+                    <button class="btn-generate-qr" id="btnGenerateQr" data-i18n="generate_qr_btn">
                         ✨ បង្កើត Bakong KHQR Code
                     </button>
 
@@ -193,7 +195,7 @@
                             <img id="qrImage" alt="Bakong KHQR Code" style="width: 220px; height: 220px; display: block;">
                         </div>
                         <div class="qr-amount-label" id="qrAmountLabel">$1.99 USD</div>
-                        <p class="qr-timer" id="qrStatusText">⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...</p>
+                        <p class="qr-timer" id="qrStatusText" data-i18n="qr_waiting">⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...</p>
                     </div>
                 </div>
             </section>
@@ -201,7 +203,7 @@
             <!-- TAB 3: ORDER HISTORY -->
             <section class="tab-content" id="tab-history">
                 <div class="section-title">
-                    <h3>📅 ប្រវត្តិបញ្ជាទិញ (Order History)</h3>
+                    <h3 data-i18n="history_title">📅 ប្រវត្តិបញ្ជាទិញ (Order History)</h3>
                 </div>
                 <div class="history-list" id="historyList">
                     <!-- Dynamic order rows -->
@@ -212,13 +214,13 @@
             <section class="tab-content" id="tab-support">
                 <div class="support-card">
                     <div class="support-icon">💬</div>
-                    <h3>ជំនួយ & ទំនាក់ទំនង Admin</h3>
-                    <p>ប្រសិនបើមានចម្ងល់ ឬបញ្ហាក្នុងការបញ្ជាទិញ សូមទាក់ទងមកកាន់ Admin យើងខ្ញុំ 24/7 ៖</p>
+                    <h3 data-i18n="support_title">ជំនួយ & ទំនាក់ទំនង Admin</h3>
+                    <p data-i18n="support_desc">ប្រសិនបើមានចម្ងល់ ឬបញ្ហាក្នុងការបញ្ជាទិញ សូមទាក់ទងមកកាន់ Admin យើងខ្ញុំ 24/7 ៖</p>
                     <div class="support-links">
-                        <a href="https://t.me/Blessing_Kh_Supports" target="_blank" class="support-btn">
+                        <a href="https://t.me/Blessing_Kh_Supports" target="_blank" class="support-btn" data-i18n="contact_admin_btn">
                             ✈️ Contact Telegram Admin (@Blessing_Kh_Supports)
                         </a>
-                        <a href="https://t.me/Blessing_Kh_Public/3" target="_blank" class="support-btn secondary">
+                        <a href="https://t.me/Blessing_Kh_Public/3" target="_blank" class="support-btn secondary" data-i18n="official_channel_btn">
                             📢 Official Telegram Channel
                         </a>
                         <a href="/about" class="support-btn secondary">

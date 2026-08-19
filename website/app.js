@@ -4,6 +4,7 @@
 
 let appState = {
     me: null,
+    lang: localStorage.getItem('blessing_lang') || 'km',
     packages: { likes: [], views: [], followers: [] },
     currentCategory: 'likes',
     selectedPackage: null,
@@ -12,20 +13,167 @@ let appState = {
     depositPollTimer: null
 };
 
-const CATEGORY_LABELS = {
-    likes: '❤️ Like & Views Khmer (ខ្មែរសុទ្ធ)',
-    views: '👀 Video Views Khmer',
-    followers: '👥 Followers Khmer'
+// ================= i18n =================
+// Same bilingual approach as the Telegram bot itself (km/en) — kept in sync
+// with the account's language preference via GET/POST /api/me(/language),
+// so switching language on the website also affects the bot side.
+const I18N = {
+    km: {
+        login_prompt: 'ចូលគណនីតាម Telegram ដើម្បីបញ្ជាទិញ និង គ្រប់គ្រងកាបូបលុយរបស់អ្នក',
+        add_funds_btn: '+ ថែមលុយ',
+        status_online: 'Online 24/7 (ស្វ័យប្រវត្តិ)',
+        tab_order: 'បញ្ជាទិញសេវា',
+        tab_deposit: 'បញ្ចូលលុយ KHQR',
+        tab_history: 'ប្រវត្តិទិញ',
+        tab_support: 'ជំនួយ & Admin',
+        step1_title: '1. ជ្រើសរើសបណ្តាញសង្គម (Choose Platform)',
+        step2_title: '2. ជ្រើសរើសប្រភេទសេវាកម្ម (Select Category)',
+        step3_title: '3. ជ្រើសរើសកញ្ចប់តម្លៃ & លីង (Package & Link)',
+        tiktok_sub: 'ខ្មែរសុទ្ធ 100%',
+        coming_soon: 'Coming Soon',
+        package_label: 'ជ្រើសរើសកញ្ចប់ (Package):',
+        link_label: 'ដាក់លីង (Target Link):',
+        link_hint: 'សូមប្រាកដថា Account ឬ Video របស់អ្នកកំណត់ជា Public',
+        sum_package_label: 'កញ្ចប់ដែលជ្រើសរើស ៖',
+        sum_price_label: 'តម្លៃសរុប (Total Price) ៖',
+        sum_balance_label: 'តុល្យភាពរបស់អ្នក ៖',
+        balance_warning: '⚠️ តុល្យភាពរបស់អ្នកមិនគ្រប់គ្រាន់ឡើយ! សូមចុច "បញ្ចូលលុយ KHQR" ដើម្បីបន្ត។',
+        submit_order_btn: '⚡ បញ្ជាទិញឥឡូវនេះ (Submit Order)',
+        deposit_title: '💳 បញ្ចូលលុយតាម Bakong KHQR (Auto-Paid)',
+        deposit_desc: 'បញ្ចូលទឹកប្រាក់ចូលកាបូបលុយរបស់អ្នកភ្លាមៗ ដោយស្វ័យប្រវត្តិ ១០០% មិនបាច់រង់ចាំ!',
+        custom_amount_label: 'ឬបញ្ចូលចំនួនទឹកប្រាក់ផ្សេងទៀត ($ USD):',
+        generate_qr_btn: '✨ បង្កើត Bakong KHQR Code',
+        generating_qr: '⏳ កំពុងបង្កើត QR...',
+        qr_waiting: '⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...',
+        qr_paid: '🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរួចរាល់!',
+        qr_expired: '⌛ QR នេះផុតកំណត់ — សូមបង្កើតថ្មី។',
+        history_title: '📅 ប្រវត្តិបញ្ជាទិញ (Order History)',
+        history_empty: 'ពុំទាន់មានប្រវត្តិបញ្ជាទិញនៅឡើយទេ',
+        support_title: 'ជំនួយ & ទំនាក់ទំនង Admin',
+        support_desc: 'ប្រសិនបើមានចម្ងល់ ឬបញ្ហាក្នុងការបញ្ជាទិញ សូមទាក់ទងមកកាន់ Admin យើងខ្ញុំ 24/7 ៖',
+        contact_admin_btn: '✈️ Contact Telegram Admin (@Blessing_Kh_Supports)',
+        official_channel_btn: '📢 Official Telegram Channel',
+        toast_no_link: '⚠️ សូមបញ្ចូល Link target របស់អ្នកជាមុនសិន!',
+        toast_insufficient_balance: '⚠️ តុល្យភាពមិនគ្រប់គ្រាន់ឡើយ! សូមបញ្ចូលលុយជាមុនសិន',
+        toast_order_failed: '⚠️ បញ្ជាទិញមិនជោគជ័យ — សូមសាកល្បងម្តងទៀត',
+        toast_order_success: '🎉 បញ្ជាទិញជោគជ័យ!',
+        toast_network_error: '⚠️ បញ្ហាបណ្តាញ — សូមសាកល្បងម្តងទៀត',
+        toast_qr_failed: '⚠️ មិនអាចបង្កើត QR បានទេ — សូមសាកល្បងម្តងទៀត',
+        toast_deposit_success: '🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរបស់អ្នករួចរាល់!',
+        toast_platform_wip: '🚧 សេវាកម្មនេះកំពុងរៀបចំឡើង។ សូមជ្រើសរើស TikTok ជាបណ្តោះអាសន្ន!',
+        signing_in: 'កំពុងចូល... (Signing in...)',
+        login_failed: '❌ Login failed — please try again.',
+        login_unavailable: '⚠️ Login temporarily unavailable — please try again shortly.',
+        server_unreachable: '⚠️ Could not reach server.',
+        cat_likes: '❤️ Like & Views Khmer (ខ្មែរសុទ្ធ)',
+        cat_views: '👀 Video Views Khmer',
+        cat_followers: '👥 Followers Khmer',
+        lang_toggle_btn: '🇬🇧 English'
+    },
+    en: {
+        login_prompt: 'Log in with Telegram to order services and manage your wallet',
+        add_funds_btn: '+ Add Funds',
+        status_online: 'Online 24/7 (Automated)',
+        tab_order: 'Order Services',
+        tab_deposit: 'Deposit KHQR',
+        tab_history: 'Order History',
+        tab_support: 'Support & Admin',
+        step1_title: '1. Choose Platform',
+        step2_title: '2. Select Category',
+        step3_title: '3. Package & Link',
+        tiktok_sub: '100% Real Khmer',
+        coming_soon: 'Coming Soon',
+        package_label: 'Select Package:',
+        link_label: 'Target Link:',
+        link_hint: 'Make sure the account or video is set to Public',
+        sum_package_label: 'Selected Package:',
+        sum_price_label: 'Total Price:',
+        sum_balance_label: 'Your Balance:',
+        balance_warning: '⚠️ Insufficient balance! Tap "Deposit KHQR" to top up first.',
+        submit_order_btn: '⚡ Submit Order',
+        deposit_title: '💳 Deposit via Bakong KHQR (Auto-Paid)',
+        deposit_desc: 'Top up your wallet instantly — 100% automated, no waiting!',
+        custom_amount_label: 'Or enter a custom amount ($ USD):',
+        generate_qr_btn: '✨ Generate Bakong KHQR Code',
+        generating_qr: '⏳ Generating QR...',
+        qr_waiting: '⏳ Checking for your payment automatically...',
+        qr_paid: '🎉 Payment successful! Your wallet has been credited!',
+        qr_expired: '⌛ This QR has expired — please generate a new one.',
+        history_title: '📅 Order History',
+        history_empty: 'No orders yet.',
+        support_title: 'Support & Contact Admin',
+        support_desc: 'Have questions or issues with an order? Contact our Admin 24/7:',
+        contact_admin_btn: '✈️ Contact Telegram Admin (@Blessing_Kh_Supports)',
+        official_channel_btn: '📢 Official Telegram Channel',
+        toast_no_link: '⚠️ Please enter the target link first!',
+        toast_insufficient_balance: '⚠️ Insufficient balance! Please deposit first.',
+        toast_order_failed: '⚠️ Order failed — please try again.',
+        toast_order_success: '🎉 Order placed successfully!',
+        toast_network_error: '⚠️ Network error — please try again.',
+        toast_qr_failed: '⚠️ Could not generate QR — please try again.',
+        toast_deposit_success: '🎉 Payment successful! Your wallet has been credited!',
+        toast_platform_wip: '🚧 Service under construction. Please select TikTok for now!',
+        signing_in: 'Signing in...',
+        login_failed: '❌ Login failed — please try again.',
+        login_unavailable: '⚠️ Login temporarily unavailable — please try again shortly.',
+        server_unreachable: '⚠️ Could not reach server.',
+        cat_likes: '❤️ Like & Views Khmer',
+        cat_views: '👀 Video Views Khmer',
+        cat_followers: '👥 Followers Khmer',
+        lang_toggle_btn: '🇰🇭 ខ្មែរ'
+    }
 };
+
+function t(key) {
+    return (I18N[appState.lang] && I18N[appState.lang][key]) || I18N.km[key] || key;
+}
+
+function applyTranslations() {
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+        el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.documentElement.lang = appState.lang;
+    const loginToggle = document.getElementById('btnToggleLangLogin');
+    if (loginToggle) loginToggle.textContent = t('lang_toggle_btn');
+    const appToggle = document.getElementById('btnToggleLang');
+    if (appToggle) appToggle.textContent = appState.lang === 'km' ? '🇰🇭 KM' : '🇬🇧 EN';
+}
+
+async function setLanguage(lang) {
+    appState.lang = lang === 'en' ? 'en' : 'km';
+    localStorage.setItem('blessing_lang', appState.lang);
+    applyTranslations();
+    renderCategories();
+    renderPackages();
+    if (appState.orders) renderOrderHistory();
+    if (appState.me) {
+        try {
+            await fetch('/api/me/language', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lang: appState.lang })
+            });
+        } catch (e) {}
+    }
+}
+
+const CATEGORY_LABEL_KEYS = { likes: 'cat_likes', views: 'cat_views', followers: 'cat_followers' };
 
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+    applyTranslations();
     initNavigationTabs();
     initPlatformSelector();
     initOrderForm();
     initDepositSection();
     document.getElementById('btnLogout').addEventListener('click', logout);
+    document.getElementById('btnToggleLang').addEventListener('click', () => {
+        setLanguage(appState.lang === 'km' ? 'en' : 'km');
+    });
+    document.getElementById('btnToggleLangLogin').addEventListener('click', () => {
+        setLanguage(appState.lang === 'km' ? 'en' : 'km');
+    });
 
     // Already have a valid session? (returning visit — cookie still valid)
     const me = await fetchMe();
@@ -54,16 +202,16 @@ async function showLoginGate() {
             script.setAttribute('data-request-access', 'write');
             document.getElementById('telegramLoginContainer').appendChild(script);
         } else {
-            document.getElementById('loginHint').textContent = '⚠️ Login temporarily unavailable — please try again shortly.';
+            document.getElementById('loginHint').textContent = t('login_unavailable');
         }
     } catch (e) {
-        document.getElementById('loginHint').textContent = '⚠️ Could not reach server.';
+        document.getElementById('loginHint').textContent = t('server_unreachable');
     }
 }
 
 // Called by the Telegram Login Widget after the user authorizes
 window.onTelegramAuth = async function (user) {
-    document.getElementById('loginHint').textContent = 'កំពុងចូល... (Signing in...)';
+    document.getElementById('loginHint').textContent = t('signing_in');
     try {
         const res = await fetch('/api/auth/telegram-login', {
             method: 'POST',
@@ -71,13 +219,13 @@ window.onTelegramAuth = async function (user) {
             body: JSON.stringify(user)
         });
         if (!res.ok) {
-            document.getElementById('loginHint').textContent = '❌ Login failed — please try again.';
+            document.getElementById('loginHint').textContent = t('login_failed');
             return;
         }
         const me = await fetchMe();
         if (me) await enterApp(me);
     } catch (e) {
-        document.getElementById('loginHint').textContent = '❌ Login failed — please try again.';
+        document.getElementById('loginHint').textContent = t('login_failed');
     }
 };
 
@@ -98,6 +246,12 @@ async function fetchMe() {
 
 async function enterApp(me) {
     appState.me = me;
+    // Account's saved language preference (bot side) wins on first login of
+    // a session unless the visitor already picked a language on this device.
+    if (!localStorage.getItem('blessing_lang') && me.lang) {
+        appState.lang = me.lang;
+        applyTranslations();
+    }
     document.getElementById('loginGate').classList.add('hidden');
     document.getElementById('appLayout').classList.remove('hidden');
 
@@ -159,7 +313,7 @@ function initPlatformSelector() {
         card.addEventListener('click', () => {
             const platform = card.getAttribute('data-platform');
             if (platform !== 'tiktok') {
-                showToast('🚧 Service under construction. Please select TikTok for now!', 'error');
+                showToast(t('toast_platform_wip'), 'error');
                 return;
             }
             cards.forEach(c => c.classList.remove('active'));
@@ -183,10 +337,10 @@ async function loadPackages() {
 function renderCategories() {
     const container = document.getElementById('categorySelector');
     container.innerHTML = '';
-    Object.keys(CATEGORY_LABELS).forEach(catId => {
+    Object.keys(CATEGORY_LABEL_KEYS).forEach(catId => {
         const btn = document.createElement('button');
         btn.className = `cat-btn ${catId === appState.currentCategory ? 'active' : ''}`;
-        btn.textContent = CATEGORY_LABELS[catId];
+        btn.textContent = t(CATEGORY_LABEL_KEYS[catId]);
         btn.addEventListener('click', () => {
             document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
@@ -246,7 +400,7 @@ function initOrderForm() {
     btn.addEventListener('click', async () => {
         const link = document.getElementById('targetLinkInput').value.trim();
         if (!link) {
-            showToast('⚠️ សូមបញ្ចូល Link target របស់អ្នកជាមុនសិន!', 'error');
+            showToast(t('toast_no_link'), 'error');
             return;
         }
         if (!appState.selectedPackage) return;
@@ -266,9 +420,9 @@ function initOrderForm() {
 
             if (!res.ok) {
                 if (data.error === 'insufficient_balance') {
-                    showToast('⚠️ តុល្យភាពមិនគ្រប់គ្រាន់ឡើយ! សូមបញ្ចូលលុយជាមុនសិន', 'error');
+                    showToast(t('toast_insufficient_balance'), 'error');
                 } else {
-                    showToast('⚠️ បញ្ជាទិញមិនជោគជ័យ — សូមសាកល្បងម្តងទៀត', 'error');
+                    showToast(t('toast_order_failed'), 'error');
                 }
                 return;
             }
@@ -278,9 +432,9 @@ function initOrderForm() {
             updateOrderSummary();
             document.getElementById('targetLinkInput').value = '';
             await loadOrderHistory();
-            showToast(`🎉 បញ្ជាទិញជោគជ័យ! ${data.orderId}`, 'success');
+            showToast(`${t('toast_order_success')} ${data.orderId}`, 'success');
         } catch (e) {
-            showToast('⚠️ បញ្ហាបណ្តាញ — សូមសាកល្បងម្តងទៀត', 'error');
+            showToast(t('toast_network_error'), 'error');
         } finally {
             btn.disabled = false;
         }
@@ -312,7 +466,7 @@ async function generateRealDeposit(amount) {
 
     const genBtn = document.getElementById('btnGenerateQr');
     genBtn.disabled = true;
-    genBtn.textContent = '⏳ កំពុងបង្កើត QR...';
+    genBtn.textContent = t('generating_qr');
 
     try {
         const res = await fetch('/api/deposits', {
@@ -321,7 +475,7 @@ async function generateRealDeposit(amount) {
             body: JSON.stringify({ amount })
         });
         if (!res.ok) {
-            showToast('⚠️ មិនអាចបង្កើត QR បានទេ — សូមសាកល្បងម្តងទៀត', 'error');
+            showToast(t('toast_qr_failed'), 'error');
             return;
         }
         const dep = await res.json();
@@ -332,7 +486,7 @@ async function generateRealDeposit(amount) {
         const statusText = document.getElementById('qrStatusText');
 
         label.textContent = `$${dep.amount.toFixed(2)} USD`;
-        statusText.textContent = '⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...';
+        statusText.textContent = t('qr_waiting');
         card.classList.remove('hidden');
 
         // Server-generated QR image (same api.qrserver.com approach the Telegram
@@ -344,10 +498,10 @@ async function generateRealDeposit(amount) {
         const balanceBeforePay = appState.me.balance;
         pollDepositStatus(dep.depositId, balanceBeforePay);
     } catch (e) {
-        showToast('⚠️ បញ្ហាបណ្តាញ — សូមសាកល្បងម្តងទៀត', 'error');
+        showToast(t('toast_network_error'), 'error');
     } finally {
         genBtn.disabled = false;
-        genBtn.textContent = '✨ បង្កើត Bakong KHQR Code';
+        genBtn.textContent = t('generate_qr_btn');
     }
 }
 
@@ -369,10 +523,10 @@ function pollDepositStatus(depositId, balanceBeforePay) {
 
             const statusText = document.getElementById('qrStatusText');
             if (me && me.balance > balanceBeforePay) {
-                statusText.textContent = '🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរួចរាល់!';
-                showToast('🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរបស់អ្នករួចរាល់!', 'success');
+                statusText.textContent = t('qr_paid');
+                showToast(t('toast_deposit_success'), 'success');
             } else {
-                statusText.textContent = '⌛ QR នេះផុតកំណត់ — សូមបង្កើតថ្មី។';
+                statusText.textContent = t('qr_expired');
             }
         } catch (e) {}
     }, 4000);
@@ -402,7 +556,7 @@ function renderOrderHistory() {
     if (appState.orders.length === 0) {
         list.innerHTML = `
             <div class="history-card">
-                <p style="text-align:center; color: var(--text-sub);">ពុំទាន់មានប្រវត្តិបញ្ជាទិញនៅឡើយទេ</p>
+                <p style="text-align:center; color: var(--text-sub);">${t('history_empty')}</p>
             </div>
         `;
         return;

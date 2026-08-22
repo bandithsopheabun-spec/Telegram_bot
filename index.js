@@ -3080,7 +3080,7 @@ const adminManageResellersKeyboard = Markup.keyboard([
 const adminUsersKeyboard = Markup.keyboard([
     ['🔍 Find user', '📋 All Users'],
     ['➕ Credit user', '➖ Deduct user'],
-    ['🧹 Clear Pending Deposits'],
+    ['📝 Pending Approvals', '🧹 Clear Pending Deposits'],
     ['💸 · Exit to user', '🔐 Admin Menu']
 ]).resize();
 
@@ -3210,6 +3210,76 @@ bot.hears(['➖ Deduct user', 'Deduct user'], (ctx) => {
     if (!isAdmin(userId)) return;
     userState[userId] = { step: 'AWAITING_ADMIN_DEDUCT_ID' };
     ctx.replyWithHTML(`🆔 <b>Send the user ID to deduct balance ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 📝 PENDING APPROVALS — lists every deposit still awaiting an admin
+// decision (Approve/Reject), oldest first, each with its own 1-click
+// buttons right here — no need to scroll back through the admin channel to
+// find the original notification. Now that a Pending row is only created
+// once a customer actually confirms payment (see confirm_dep /
+// POST /api/deposits/:id/confirm), every row shown here is a genuine
+// unresolved request, not QR-generation noise.
+bot.hears(['📝 Pending Approvals', 'Pending Approvals'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    if (!supabase) {
+        return ctx.replyWithHTML(`⚠️ <b>Database មិនត្រូវបានភ្ជាប់ទេ (No Supabase)។</b>`, adminUsersKeyboard);
+    }
+
+    let rows = [];
+    try {
+        const { data } = await supabase
+            .from('deposits')
+            .select('deposit_id, telegram_id, amount, bonus, created_at')
+            .eq('status', 'Pending')
+            .order('created_at', { ascending: true });
+        rows = data || [];
+    } catch (e) {
+        return ctx.replyWithHTML(`⚠️ <b>មិនអាចទាញយកទិន្នន័យបានទេ:</b> ${e.message}`, adminUsersKeyboard);
+    }
+
+    if (rows.length === 0) {
+        return ctx.replyWithHTML(`✅ <b>គ្មានសំណើរង់ចាំអនុម័តទេ — ស្អាតគ្រប់យ៉ាង!</b>`, adminUsersKeyboard);
+    }
+
+    const SHOW_LIMIT = 8;
+    const toShow = rows.slice(0, SHOW_LIMIT);
+    const extra = rows.length - toShow.length;
+
+    await ctx.replyWithHTML(
+        `📝 <b>Pending Approvals — សរុប ${rows.length} សំណើ</b>\n----------------------------------------\n` +
+        `<i>ចាស់បំផុតបង្ហាញមុន ៖</i>`,
+        adminUsersKeyboard
+    );
+
+    for (const dep of toShow) {
+        const amount = parseFloat(dep.amount) || 0;
+        const bonus = parseFloat(dep.bonus) || 0;
+        const ageMs = Date.now() - new Date(dep.created_at).getTime();
+        const ageHours = Math.floor(ageMs / (1000 * 60 * 60));
+        const ageLabel = ageHours < 1 ? 'ថ្មីៗ' : ageHours < 24 ? `${ageHours}ម៉ោងមុន` : `${Math.floor(ageHours / 24)}ថ្ងៃមុន`;
+
+        const itemMsg =
+            `🆔 <b>Deposit ID:</b> <code>#${dep.deposit_id}</code>\n` +
+            `📲 <b>User ID:</b> <code>${dep.telegram_id}</code>\n` +
+            `💳 <b>Amount:</b> $${amount.toFixed(2)} USD` + (bonus > 0 ? ` (+ 🎁 $${bonus.toFixed(2)})` : '') + `\n` +
+            `⏰ <b>Submitted:</b> ${ageLabel}`;
+
+        const itemKb = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Approve', `approve_dep_${dep.deposit_id}_${dep.telegram_id}_${amount}_${bonus}`)],
+            [Markup.button.callback('❌ Reject', `reject_dep_${dep.deposit_id}_${dep.telegram_id}`)]
+        ]);
+
+        try { await ctx.replyWithHTML(itemMsg, itemKb); } catch (e) {}
+    }
+
+    if (extra > 0) {
+        await ctx.replyWithHTML(
+            `<i>… និង ${extra} សំណើផ្សេងទៀត — ប្រើ 🧹 Clear Pending Deposits ដើម្បីសម្អាតជាបាច់ ប្រសិនបើភាគច្រើនជា Test។</i>`,
+            adminUsersKeyboard
+        );
+    }
 });
 
 // 🧹 CLEAR PENDING DEPOSITS — bulk-clear stale "Pending" deposit records

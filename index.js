@@ -3074,6 +3074,7 @@ const adminManageResellersKeyboard = Markup.keyboard([
 const adminUsersKeyboard = Markup.keyboard([
     ['🔍 Find user', '📋 All Users'],
     ['➕ Credit user', '➖ Deduct user'],
+    ['🧹 Clear Pending Deposits'],
     ['💸 · Exit to user', '🔐 Admin Menu']
 ]).resize();
 
@@ -3203,6 +3204,92 @@ bot.hears(['➖ Deduct user', 'Deduct user'], (ctx) => {
     if (!isAdmin(userId)) return;
     userState[userId] = { step: 'AWAITING_ADMIN_DEDUCT_ID' };
     ctx.replyWithHTML(`🆔 <b>Send the user ID to deduct balance ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🧹 CLEAR PENDING DEPOSITS — bulk-clear stale "Pending" deposit records
+// (own test deposits, or requests that were never actually paid) so they
+// stop cluttering Deposit Log / admin queries. Never touches any balance —
+// a deposit only reaches "Pending" before an admin approves it, so there is
+// nothing to reverse; this only updates the deposits table's status column.
+bot.hears(['🧹 Clear Pending Deposits', 'Clear Pending Deposits'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    if (!supabase) {
+        return ctx.replyWithHTML(`⚠️ <b>Database មិនត្រូវបានភ្ជាប់ទេ (No Supabase) — គ្មាន Pending Deposit ត្រូវសម្អាតទេ។</b>`, adminUsersKeyboard);
+    }
+
+    let rows = [];
+    try {
+        const { data } = await supabase.from('deposits').select('deposit_id, telegram_id, amount').eq('status', 'Pending');
+        rows = data || [];
+    } catch (e) {
+        return ctx.replyWithHTML(`⚠️ <b>មិនអាចទាញយកទិន្នន័យបានទេ:</b> ${e.message}`, adminUsersKeyboard);
+    }
+
+    if (rows.length === 0) {
+        return ctx.replyWithHTML(`✅ <b>គ្មាន Pending Deposit ត្រូវសម្អាតទេ — Database ស្អាតរួចរាល់!</b>`, adminUsersKeyboard);
+    }
+
+    const byUser = {};
+    let totalAmount = 0;
+    rows.forEach(r => {
+        const amt = parseFloat(r.amount) || 0;
+        totalAmount += amt;
+        byUser[r.telegram_id] = (byUser[r.telegram_id] || 0) + 1;
+    });
+    const userLines = Object.entries(byUser)
+        .sort((a, b) => b[1] - a[1])
+        .map(([uid, count]) => `🆔 <code>${uid}</code> — ${count} deposit(s)`)
+        .join('\n');
+
+    const summaryMsg =
+        `🧹 <b>សម្អាត Pending Deposits</b>\n----------------------------------------\n\n` +
+        `📊 <b>សរុប:</b> ${rows.length} deposit(s) — $${totalAmount.toFixed(2)} USD\n\n` +
+        `${userLines}\n\n` +
+        `⚠️ <i>ការនេះនឹងផ្លាស់ប្តូរស្ថានភាពទៅជា "Rejected (Cleared)" ប៉ុណ្ណោះ — </i>` +
+        `<i>មិនប៉ះពាល់ Balance របស់នរណាម្នាក់ទេ ព្រោះមិនទាន់មាន Balance ត្រូវបានបូកចូលឡើយ។ តើបញ្ជាក់ដែរឬទេ?</i>`;
+
+    const confirmKb = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Confirm — Clear All', 'confirm_clear_pending_deposits')],
+        [Markup.button.callback('❌ Cancel', 'cancel_clear_pending_deposits')]
+    ]);
+
+    await ctx.replyWithHTML(summaryMsg, confirmKb);
+});
+
+bot.action('confirm_clear_pending_deposits', async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+
+    if (!supabase) {
+        try { return ctx.answerCbQuery('⚠️ No Supabase', { show_alert: true }); } catch (e) { return; }
+    }
+
+    try {
+        const { data } = await supabase
+            .from('deposits')
+            .update({ status: 'Rejected (Cleared)' })
+            .eq('status', 'Pending')
+            .select('deposit_id');
+        const cleared = (data || []).length;
+        try { await ctx.answerCbQuery(`✅ បានសម្អាត ${cleared} deposit(s)!`); } catch (e) {}
+        await ctx.editMessageText(`✅ <b>បានសម្អាត Pending Deposits ចំនួន ${cleared} ដោយជោគជ័យ!</b>`, { parse_mode: 'HTML' });
+    } catch (e) {
+        try { await ctx.answerCbQuery('⚠️ Error: ' + e.message, { show_alert: true }); } catch (e2) {}
+    }
+});
+
+bot.action('cancel_clear_pending_deposits', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    try { await ctx.answerCbQuery('❌ បានបោះបង់'); } catch (e) {}
+    try { await ctx.editMessageText('❌ <b>បានបោះបង់ — គ្មាន Pending Deposit ណាមួយត្រូវបានផ្លាស់ប្តូរទេ។</b>', { parse_mode: 'HTML' }); } catch (e) {}
 });
 
 // 📊 ANALYTICS & REPORTS MENU

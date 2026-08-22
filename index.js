@@ -3065,6 +3065,12 @@ let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
 const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
 const processedOrderActions = new Set(); // Prevents an order being Done AND Cancel/Refund'd (or either twice)
+// Tracks the original "NEW DEPOSIT SUBMITTED" notification (chat + message
+// id) for each depId, so a decision made from anywhere else — e.g. the
+// 📝 Pending Approvals listing, which is a *separate* message in the
+// admin's own private chat — can also update that original card instead of
+// leaving it stuck showing "⏳ Pending Approval" forever.
+const depositNotifyMessages = {};
 let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/ABAPAYJj498612l';
 // howtoVideoLinks is declared earlier (near loadHowtoConfig/saveHowtoConfig) so the
 // startup loadHowtoConfig() call can assign it without a temporal-dead-zone error.
@@ -4158,10 +4164,11 @@ bot.action(/^confirm_dep/, async (ctx) => {
 
     // Send 1-Click Approval notification ONLY to Admin Private Group (-1003953732694)
     try {
-        await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminNotifyMsg, {
+        const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminNotifyMsg, {
             parse_mode: 'HTML',
             ...adminApprovalKb
         });
+        depositNotifyMessages[depId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
         console.log(`✅ Sent Mode 1 Deposit Request to ${BRAND_NAME}_Purchase Order Group (-1003953732694)!`);
     } catch (groupErr) {
         console.error('⚠️ Could not send to admin channel:', groupErr.message);
@@ -4208,15 +4215,27 @@ bot.action(/^approve_dep/, async (ctx) => {
         await ctx.answerCbQuery('✅ បញ្ចូលលុយជោគជ័យ!');
     } catch (e) {}
 
+    const approvedText =
+        `✅ <b>បានយល់ព្រមការទូទាត់ #${depId} ជោគជ័យ!</b>\n\n` +
+        `📲 User ID: <code>${targetUserId}</code>\n` +
+        `💳 Added: $${amount.toFixed(2)} + Bonus: $${bonus.toFixed(2)} = <b>$${totalCredit.toFixed(2)} USD</b>\n` +
+        `💰 New Balance: <b>$${newBal.toFixed(2)} USD</b>`;
+
     try {
-        await ctx.editMessageText(
-            `✅ <b>បានយល់ព្រមការទូទាត់ #${depId} ជោគជ័យ!</b>\n\n` +
-            `📲 User ID: <code>${targetUserId}</code>\n` +
-            `💳 Added: $${amount.toFixed(2)} + Bonus: $${bonus.toFixed(2)} = <b>$${totalCredit.toFixed(2)} USD</b>\n` +
-            `💰 New Balance: <b>$${newBal.toFixed(2)} USD</b>`,
-            { parse_mode: 'HTML' }
-        );
+        await ctx.editMessageText(approvedText, { parse_mode: 'HTML' });
     } catch (e) {}
+
+    // The click may have come from the 📝 Pending Approvals listing (a
+    // separate message in the admin's own chat) rather than the original
+    // notification card — sync that original card too, so it doesn't stay
+    // stuck showing "⏳ Pending Approval" with live buttons indefinitely.
+    const notifyRef = depositNotifyMessages[depId];
+    if (notifyRef) {
+        delete depositNotifyMessages[depId];
+        try {
+            await bot.telegram.editMessageText(notifyRef.chatId, notifyRef.messageId, undefined, approvedText, { parse_mode: 'HTML' });
+        } catch (e) {}
+    }
 
     // Send thank you receipt message directly to Customer
     const thankYouMsg = 
@@ -4257,7 +4276,17 @@ bot.action(/^reject_dep_([^_]+)_([^_]+)$/, async (ctx) => {
     }
 
     ctx.answerCbQuery('❌ បានបដិសេធការទូទាត់');
-    ctx.editMessageText(`❌ <b>បានបដិសេធការទូទាត់ #${depId}</b>`, { parse_mode: 'HTML' });
+    const rejectedText = `❌ <b>បានបដិសេធការទូទាត់ #${depId}</b>`;
+    ctx.editMessageText(rejectedText, { parse_mode: 'HTML' });
+
+    // Sync the original notification card too — see approve_dep for why.
+    const notifyRef = depositNotifyMessages[depId];
+    if (notifyRef) {
+        delete depositNotifyMessages[depId];
+        try {
+            await bot.telegram.editMessageText(notifyRef.chatId, notifyRef.messageId, undefined, rejectedText, { parse_mode: 'HTML' });
+        } catch (e) {}
+    }
 
     try {
         await bot.telegram.sendMessage(targetUserId, `❌ <b>ការទូទាត់ #${depId} មិនត្រូវបានទទួលស្គាល់ឡើយ។ សូមទាក់ទង Admin Support!</b>`, { parse_mode: 'HTML' });
@@ -4894,10 +4923,11 @@ http.createServer(async (req, res) => {
             ]);
 
             try {
-                await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminNotifyMsg, {
+                const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminNotifyMsg, {
                     parse_mode: 'HTML',
                     ...adminApprovalKb
                 });
+                depositNotifyMessages[depositId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
             } catch (groupErr) {
                 console.error('⚠️ Could not send website deposit confirmation to admin channel:', groupErr.message);
             }

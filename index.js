@@ -4201,15 +4201,30 @@ bot.action(/^approve_dep/, async (ctx) => {
     processedDepositIds.add(`admin_decided_${depId}`);
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
+    // Database-level compare-and-swap as a second, independent guard against
+    // double-crediting — the in-memory processedDepositIds Set above only
+    // protects a single running process; this update only succeeds (and
+    // returns a row) if the deposit's Supabase status is still 'Pending' at
+    // this exact moment, so a second Approve click — from a stale button on
+    // the original card, a stale Pending Approvals listing, or even a
+    // different process — can never credit the balance twice.
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('deposits')
+                .update({ status: 'Completed' })
+                .eq('deposit_id', depId)
+                .eq('status', 'Pending')
+                .select('deposit_id');
+            if (!data || data.length === 0) {
+                try { return ctx.answerCbQuery('⚠️ ការទូទាត់នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true }); } catch (e) { return; }
+            }
+        } catch (e) {}
+    }
+
     const currentBal = getBalance(targetUserId);
     const newBal = currentBal + totalCredit;
     await dbUpdateBalance(targetUserId, newBal);
-
-    if (supabase) {
-        try {
-            await supabase.from('deposits').update({ status: 'Completed' }).eq('deposit_id', depId);
-        } catch (e) {}
-    }
 
     try {
         await ctx.answerCbQuery('✅ បញ្ចូលលុយជោគជ័យ!');
@@ -4233,7 +4248,14 @@ bot.action(/^approve_dep/, async (ctx) => {
     if (notifyRef) {
         delete depositNotifyMessages[depId];
         try {
-            await bot.telegram.editMessageText(notifyRef.chatId, notifyRef.messageId, undefined, approvedText, { parse_mode: 'HTML' });
+            // reply_markup must be passed explicitly — editMessageText leaves
+            // the existing inline keyboard untouched otherwise, which left
+            // the Approve/Reject buttons live and clickable on the original
+            // card even after a decision was already made elsewhere.
+            await bot.telegram.editMessageText(notifyRef.chatId, notifyRef.messageId, undefined, approvedText, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [] }
+            });
         } catch (e) {}
     }
 
@@ -4269,9 +4291,20 @@ bot.action(/^reject_dep_([^_]+)_([^_]+)$/, async (ctx) => {
     processedDepositIds.add(`admin_decided_${depId}`);
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
+    // Database-level compare-and-swap — see approve_dep for why. If this
+    // deposit was already decided (e.g. approved via a different stale
+    // button), skip sending a contradicting "rejected" DM to the customer.
     if (supabase) {
         try {
-            await supabase.from('deposits').update({ status: 'Rejected' }).eq('deposit_id', depId);
+            const { data } = await supabase
+                .from('deposits')
+                .update({ status: 'Rejected' })
+                .eq('deposit_id', depId)
+                .eq('status', 'Pending')
+                .select('deposit_id');
+            if (!data || data.length === 0) {
+                try { return ctx.answerCbQuery('⚠️ ការទូទាត់នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true }); } catch (e) { return; }
+            }
         } catch (e) {}
     }
 
@@ -4279,12 +4312,16 @@ bot.action(/^reject_dep_([^_]+)_([^_]+)$/, async (ctx) => {
     const rejectedText = `❌ <b>បានបដិសេធការទូទាត់ #${depId}</b>`;
     ctx.editMessageText(rejectedText, { parse_mode: 'HTML' });
 
-    // Sync the original notification card too — see approve_dep for why.
+    // Sync the original notification card too — see approve_dep for why
+    // reply_markup must be passed explicitly to actually clear its buttons.
     const notifyRef = depositNotifyMessages[depId];
     if (notifyRef) {
         delete depositNotifyMessages[depId];
         try {
-            await bot.telegram.editMessageText(notifyRef.chatId, notifyRef.messageId, undefined, rejectedText, { parse_mode: 'HTML' });
+            await bot.telegram.editMessageText(notifyRef.chatId, notifyRef.messageId, undefined, rejectedText, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [] }
+            });
         } catch (e) {}
     }
 

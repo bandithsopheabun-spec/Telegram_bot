@@ -332,7 +332,7 @@ function getSessionUserId(req) {
 const pendingAutoDeposits = {};
 const userLastPendingDeposit = {};
 
-function registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash) {
+function registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash, mode = 'BAKONG') {
     const item = {
         depositId,
         userId,
@@ -340,6 +340,9 @@ function registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5H
         bonusAmount,
         totalCredit: amount + bonusAmount,
         md5Hash,
+        mode, // which channel this deposit expects to be settled through —
+              // lets the background poller skip Bakong/ACLEDA checks for
+              // entries that will only ever be settled by a webhook (PAYWAY)
         createdAt: Date.now()
     };
     pendingAutoDeposits[depositId] = item;
@@ -438,6 +441,14 @@ function startAutoPaymentEngine() {
                 delete pendingAutoDeposits[depId];
                 continue;
             }
+
+            // PayWay deposits settle exclusively via the ABA webhook (POST
+            // /payway) — their md5Hash isn't a real KHQR hash and will never
+            // match a Bakong transaction, so checking it here would only
+            // waste the daily Bakong quota for nothing. Leave the entry in
+            // place (the webhook handler still needs to find it) but skip
+            // the check.
+            if (item.mode === 'PAYWAY') continue;
 
             // Check Bakong & ACLEDA Open APIs in background
             bakongApiCallsToday++;
@@ -2252,7 +2263,7 @@ bot.on('text', async (ctx, next) => {
         if (depositMode === 'PAYWAY') {
             const isKm = lang === 'km';
             const md5Hash = require('crypto').createHash('md5').update(depositId).digest('hex');
-            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash);
+            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash, 'PAYWAY');
 
             const paywayMsg = isKm ?
                 `🏦 <b>ទូទាត់តាម ABA PayWay (Link ទូទាត់ប្រាក់)</b>\n----------------------------------------\n\n` +
@@ -2338,8 +2349,12 @@ bot.on('text', async (ctx, next) => {
         const dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
         const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
 
-        // Register for 100% Fully Automated Background Payment Engine (No Button Click Needed!)
-        registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash);
+        // Mode 1 (Manual Admin Approval) does NOT register with the
+        // background auto-payment engine — approve_dep/reject_dep already
+        // work entirely off the callback_data embedded in the admin's
+        // message and don't need pendingAutoDeposits at all, so registering
+        // here would only burn Bakong's scarce daily quota polling a deposit
+        // that a human, not the API, is going to settle.
         const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(dynamicQrData)}`;
 
         // Check for local ABA QR image file if provided
@@ -3819,8 +3834,13 @@ bot.action(/^confirm_dep/, async (ctx) => {
     const khqrString = process.env.ABA_KHQR_STRING || OFFICIAL_ABA_KHQR;
     const md5Hash = require('crypto').createHash('md5').update(khqrString).digest('hex');
 
-    const isBakongVerified = await checkBakongTransaction(md5Hash);
-    const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, amount) : false;
+    // Skip the Bakong/ACLEDA check entirely in Manual/PayWay mode — their
+    // result is ignored below anyway (those modes never take the instant-
+    // approve branch), so calling them just burns Bakong's scarce daily
+    // request quota for nothing.
+    const skipAutoCheck = depositMode === 'MANUAL' || depositMode === 'PAYWAY';
+    const isBakongVerified = skipAutoCheck ? false : await checkBakongTransaction(md5Hash);
+    const isAcledaVerified = (!skipAutoCheck && isAcledaPaymentOn) ? await checkAcledaTransaction(depId, amount) : false;
 
     if (depositMode !== 'MANUAL' && depositMode !== 'PAYWAY' && (isInstantAutoDepositOn || isBakongVerified || isAcledaVerified)) {
         // Instant 100% Fully Automated Deposit Approval!
@@ -4394,8 +4414,11 @@ http.createServer(async (req, res) => {
         if (apiPath === '/api/bot-info' && req.method === 'GET') {
             // Public — lets the frontend build the Telegram Login Widget without
             // hardcoding the bot's @username (so this same file works for any
-            // white-label clone, see BRAND_NAME/NEW_CLIENT_SETUP.md).
-            return sendJson(res, 200, { username: (bot.botInfo && bot.botInfo.username) || null, brandName: BRAND_NAME });
+            // white-label clone, see BRAND_NAME/NEW_CLIENT_SETUP.md). Also
+            // exposes depositMode so the website's deposit flow can match
+            // whatever mode the admin has set on the bot (auto-payment vs
+            // manual admin-approval) instead of always assuming auto-payment.
+            return sendJson(res, 200, { username: (bot.botInfo && bot.botInfo.username) || null, brandName: BRAND_NAME, depositMode });
         }
 
         if (apiPath === '/api/auth/telegram-login' && req.method === 'POST') {
@@ -4529,15 +4552,29 @@ http.createServer(async (req, res) => {
                 } catch (e) {}
             }
 
+            // Mirror the bot's own deposit flow exactly: only Mode 2 (AUTO /
+            // ACLEDA) and Mode 4 (BAKONG) are hands-off, background-polled by
+            // the auto-payment engine. Mode 1 (MANUAL) and Mode 3 (PAYWAY)
+            // require the customer to actively confirm payment, which then
+            // notifies the admin for a 1-click Approve/Reject — same as the
+            // "💳 I Have Paid" button in the bot chat. Registering these into
+            // pendingAutoDeposits would just burn Bakong's scarce daily quota
+            // checking transactions a human is going to settle anyway.
+            const isAutoMode = depositMode === 'BAKONG' || depositMode === 'AUTO';
+
             let dynamicQrData = await fetchBakongApiKhqrString(bakongAccountId || 'lasa_leng@aclb', amount, depositId);
             if (!dynamicQrData) {
                 dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
             }
             const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
-            registerPendingAutoDeposit(depositId, sessionUserId, amount, bonusAmount, md5Hash);
+            if (isAutoMode) {
+                registerPendingAutoDeposit(depositId, sessionUserId, amount, bonusAmount, md5Hash, depositMode);
+            }
 
             return sendJson(res, 200, {
                 depositId, amount, bonusAmount,
+                depositMode,
+                requiresManualConfirm: !isAutoMode,
                 qrString: dynamicQrData,
                 qrImageUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(dynamicQrData)}`
             });
@@ -4547,6 +4584,57 @@ http.createServer(async (req, res) => {
             const depositId = apiPath.split('/')[3];
             const pending = pendingAutoDeposits[depositId];
             return sendJson(res, 200, { status: pending ? 'pending' : 'paid_or_expired' });
+        }
+
+        // Customer clicks "✅ I Have Paid" on the website (Mode 1 / Mode 3
+        // only — see requiresManualConfirm above). Sends the exact same
+        // Approve/Reject admin notification as the bot's confirm_dep
+        // handler, so approve_dep/reject_dep need no changes to handle it.
+        if (apiPath.startsWith('/api/deposits/') && apiPath.endsWith('/confirm') && req.method === 'POST') {
+            const depositId = apiPath.split('/')[3];
+            const body = await readJsonBody(req);
+            const amount = parseFloat(body.amount) || 0;
+            const bonusAmount = parseFloat(body.bonusAmount) || 0;
+            const totalCredit = amount + bonusAmount;
+
+            if (processedDepositIds.has(depositId) || processedDepositIds.has(`cancel_${depositId}`)) {
+                return sendJson(res, 409, { error: 'already_processed' });
+            }
+            processedDepositIds.add(depositId);
+
+            let customerName = 'Website Customer';
+            try {
+                const chat = await bot.telegram.getChat(sessionUserId);
+                customerName = chat.first_name || customerName;
+            } catch (e) {}
+
+            const isPayWayMode = depositMode === 'PAYWAY';
+            const adminNotifyMsg =
+                `💳 <b>NEW DEPOSIT SUBMITTED (${isPayWayMode ? 'Mode 3: ABA PayWay Link' : 'Mode 1: Admin Approval'} — via Website)</b>\n` +
+                `----------------------------------------\n` +
+                `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n` +
+                `📲 <b>User ID:</b> <code>${sessionUserId}</code>\n` +
+                `👤 <b>Customer:</b> ${customerName}\n` +
+                `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+                `🎁 <b>Bonus:</b> +$${bonusAmount.toFixed(2)} USD\n` +
+                `💰 <b>Total to Credit:</b> $${totalCredit.toFixed(2)} USD\n` +
+                `⏳ <b>Status:</b> Pending Approval ⏳`;
+
+            const adminApprovalKb = Markup.inlineKeyboard([
+                [Markup.button.callback('✅ យល់ព្រម (Approve)', `approve_dep_${depositId}_${sessionUserId}_${amount}_${bonusAmount}`)],
+                [Markup.button.callback('❌ បដិសេធ (Reject)', `reject_dep_${depositId}_${sessionUserId}`)]
+            ]);
+
+            try {
+                await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminNotifyMsg, {
+                    parse_mode: 'HTML',
+                    ...adminApprovalKb
+                });
+            } catch (groupErr) {
+                console.error('⚠️ Could not send website deposit confirmation to admin channel:', groupErr.message);
+            }
+
+            return sendJson(res, 200, { status: 'pending_admin_approval' });
         }
 
         return sendJson(res, 404, { error: 'not_found' });

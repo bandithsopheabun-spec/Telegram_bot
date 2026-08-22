@@ -10,7 +10,15 @@ let appState = {
     selectedPackage: null,
     orders: [],
     activeDepositId: null,
-    depositPollTimer: null
+    depositPollTimer: null,
+    // Mirrors the bot's own Bot Settings > Deposit Mode ('BAKONG' / 'AUTO' =
+    // hands-off auto-detected, 'MANUAL' / 'PAYWAY' = requires the customer to
+    // tap "I Have Paid" so an admin can approve) — fetched fresh each time
+    // the app loads so switching the mode in the bot immediately reflects on
+    // the website too, with no separate website setting to keep in sync.
+    depositMode: null,
+    activeDepositAmount: 0,
+    activeDepositBonus: 0
 };
 
 // ================= i18n =================
@@ -47,6 +55,12 @@ const I18N = {
         qr_waiting: '⏳ ប្រព័ន្ធកំពុងត្រួតពិនិត្យការទូទាត់ស្វ័យប្រវត្តិ...',
         qr_paid: '🎉 ទូទាត់ជោគជ័យ! លុយចូលកាបូបលុយរួចរាល់!',
         qr_expired: '⌛ QR នេះផុតកំណត់ — សូមបង្កើតថ្មី។',
+        qr_manual_hint: '⚠️ បន្ទាប់ពីវេរប្រាក់រួច សូមចុចប៊ូតុង [ 💳 ខ្ញុំបានទូទាត់រួចរាល់ ] ខាងក្រោម',
+        qr_manual_pending: '⏳ កំពុងរង់ចាំ Admin ពិនិត្យ និង យល់ព្រម...',
+        confirm_paid_btn: '💳 ខ្ញុំបានទូទាត់រួចរាល់ (I Have Paid)',
+        confirming_paid: '⏳ កំពុងផ្ញើសំណើ...',
+        toast_confirm_sent: '✅ បានផ្ញើសារស្នើសុំបញ្ជាក់ការទូទាត់ទៅកាន់ Admin រួចរាល់!',
+        toast_confirm_failed: '⚠️ មិនអាចផ្ញើសំណើបានទេ — សូមសាកល្បងម្តងទៀត',
         history_title: '📅 ប្រវត្តិបញ្ជាទិញ (Order History)',
         history_empty: 'ពុំទាន់មានប្រវត្តិបញ្ជាទិញនៅឡើយទេ',
         support_title: 'ជំនួយ & ទំនាក់ទំនង Admin',
@@ -101,6 +115,12 @@ const I18N = {
         qr_waiting: '⏳ Checking for your payment automatically...',
         qr_paid: '🎉 Payment successful! Your wallet has been credited!',
         qr_expired: '⌛ This QR has expired — please generate a new one.',
+        qr_manual_hint: '⚠️ After transferring, please tap the [ 💳 I Have Paid ] button below',
+        qr_manual_pending: '⏳ Waiting for Admin to review and approve...',
+        confirm_paid_btn: '💳 I Have Paid (Confirm Payment)',
+        confirming_paid: '⏳ Sending request...',
+        toast_confirm_sent: '✅ Payment confirmation request sent to Admin!',
+        toast_confirm_failed: '⚠️ Could not send request — please try again',
         history_title: '📅 Order History',
         history_empty: 'No orders yet.',
         support_title: 'Support & Contact Admin',
@@ -301,7 +321,23 @@ async function enterApp(me) {
     updateUserUi();
     await loadPackages();
     await loadOrderHistory();
+    await loadDepositMode();
     checkHomeScreenPrompt();
+}
+
+// Reads the bot's currently configured Deposit Mode (Bot Settings menu) so
+// the website's deposit tab behaves identically to the Telegram chat —
+// hands-off auto-checking in Bakong/ACLEDA modes, or an "I Have Paid" button
+// that notifies Admin in Manual/PayWay modes. Public endpoint, no auth
+// required, safe to call before/after login.
+async function loadDepositMode() {
+    try {
+        const res = await fetch('/api/bot-info');
+        const info = await res.json();
+        appState.depositMode = info.depositMode || 'MANUAL';
+    } catch (e) {
+        appState.depositMode = 'MANUAL'; // safest assumption if unreachable
+    }
 }
 
 // Telegram Mini App "Add to Home Screen" (Bot API 8.0+) — lets the user pin
@@ -519,6 +555,8 @@ function initDepositSection() {
         const amount = parseFloat(customInput.value) || 1.99;
         await generateRealDeposit(amount);
     });
+
+    document.getElementById('btnConfirmPaid').addEventListener('click', confirmManualDeposit);
 }
 
 async function generateRealDeposit(amount) {
@@ -544,9 +582,9 @@ async function generateRealDeposit(amount) {
         const label = document.getElementById('qrAmountLabel');
         const qrImg = document.getElementById('qrImage');
         const statusText = document.getElementById('qrStatusText');
+        const confirmBtn = document.getElementById('btnConfirmPaid');
 
         label.textContent = `$${dep.amount.toFixed(2)} USD`;
-        statusText.textContent = t('qr_waiting');
         card.classList.remove('hidden');
 
         // Server-generated QR image (same api.qrserver.com approach the Telegram
@@ -555,13 +593,67 @@ async function generateRealDeposit(amount) {
         qrImg.src = dep.qrImageUrl;
 
         appState.activeDepositId = dep.depositId;
-        const balanceBeforePay = appState.me.balance;
-        pollDepositStatus(dep.depositId, balanceBeforePay);
+        appState.activeDepositAmount = dep.amount;
+        appState.activeDepositBonus = dep.bonusAmount;
+
+        if (dep.requiresManualConfirm) {
+            // Mode 1 (Manual) / Mode 3 (PayWay) — same as the bot chat:
+            // customer must tap "I Have Paid" themselves, no background
+            // auto-detection is running for this deposit.
+            statusText.textContent = t('qr_manual_hint');
+            confirmBtn.classList.remove('hidden');
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = t('confirm_paid_btn');
+        } else {
+            // Mode 2 (ACLEDA Auto) / Mode 4 (Bakong Auto) — hands-off,
+            // background-polled exactly like the bot chat's auto modes.
+            statusText.textContent = t('qr_waiting');
+            confirmBtn.classList.add('hidden');
+            const balanceBeforePay = appState.me.balance;
+            pollDepositStatus(dep.depositId, balanceBeforePay);
+        }
     } catch (e) {
         showToast(t('toast_network_error'), 'error');
     } finally {
         genBtn.disabled = false;
         genBtn.textContent = t('generate_qr_btn');
+    }
+}
+
+// Customer taps "💳 I Have Paid" (Manual/PayWay modes only) — mirrors the
+// bot chat's confirm_dep flow: notifies Admin with 1-click Approve/Reject
+// buttons, no Bakong/ACLEDA API call involved.
+async function confirmManualDeposit() {
+    const depositId = appState.activeDepositId;
+    if (!depositId) return;
+
+    const confirmBtn = document.getElementById('btnConfirmPaid');
+    const statusText = document.getElementById('qrStatusText');
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = t('confirming_paid');
+
+    try {
+        const res = await fetch(`/api/deposits/${depositId}/confirm`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                amount: appState.activeDepositAmount,
+                bonusAmount: appState.activeDepositBonus
+            })
+        });
+        if (!res.ok) {
+            showToast(t('toast_confirm_failed'), 'error');
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = t('confirm_paid_btn');
+            return;
+        }
+        statusText.textContent = t('qr_manual_pending');
+        confirmBtn.classList.add('hidden');
+        showToast(t('toast_confirm_sent'), 'success');
+    } catch (e) {
+        showToast(t('toast_network_error'), 'error');
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = t('confirm_paid_btn');
     }
 }
 

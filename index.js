@@ -399,6 +399,51 @@ async function rehydratePendingDeposits() {
     }
 }
 
+// Render's filesystem is ephemeral — every deploy rebuilds it fresh from
+// git, so the Mode 1 QR photo an admin uploads (written straight to disk by
+// the bot.on('photo') handler below) gets silently lost on the next
+// redeploy, reverting customers back to a generated KHQR they didn't
+// expect. This restores it from Supabase (see saveMode1QrPhotoToSupabase)
+// on every boot, before the file is needed by either the bot's own Mode 1
+// flow or GET /api/deposits/mode1-qr-image.
+async function rehydrateMode1QrPhoto() {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase
+            .from('bot_settings')
+            .select('value')
+            .eq('key', 'mode1_qr_photo')
+            .maybeSingle();
+        if (error || !data || !data.value) return;
+
+        const stored = JSON.parse(data.value);
+        const buffer = Buffer.from(stored.base64, 'base64');
+        fs.writeFileSync(path.join(__dirname, 'manual_qr.jpg'), buffer);
+        fs.writeFileSync(path.join(__dirname, 'manual_qr.png'), buffer);
+        fs.writeFileSync(path.join(__dirname, 'aba_qr.jpg'), buffer);
+        fs.writeFileSync(path.join(__dirname, 'khqr.jpg'), buffer);
+        console.log('✅ Rehydrated Mode 1 QR photo from Supabase after restart');
+    } catch (e) {
+        console.error('⚠️ rehydrateMode1QrPhoto error:', e.message);
+    }
+}
+
+// Companion to rehydrateMode1QrPhoto — called from the photo-upload handler
+// whenever the admin sets a new Mode 1 QR, so the change survives the next
+// redeploy instead of only living on the current (ephemeral) disk.
+async function saveMode1QrPhotoToSupabase(buffer) {
+    if (!supabase) return;
+    try {
+        await supabase.from('bot_settings').upsert([{
+            key: 'mode1_qr_photo',
+            value: JSON.stringify({ base64: buffer.toString('base64') }),
+            updated_at: new Date().toISOString()
+        }], { onConflict: 'key' });
+    } catch (e) {
+        console.error('⚠️ saveMode1QrPhotoToSupabase error:', e.message);
+    }
+}
+
 // NBC's Bakong Open API allows only 100 requests/day per token (discovered
 // the hard way: a customer's real, successful payment sat un-credited all
 // day because the 7s-interval polling had already burned through the daily
@@ -507,6 +552,7 @@ function startAutoPaymentEngine() {
     }, 60000); // 60s, not 7s — see BAKONG_DAILY_CALL_BUDGET comment above
 }
 
+rehydrateMode1QrPhoto().catch(() => {});
 rehydratePendingDeposits().then(startAutoPaymentEngine).catch(startAutoPaymentEngine);
 
 // User State & Preferences Storage (In-memory cache + DB fallback)
@@ -2611,6 +2657,10 @@ bot.on('photo', async (ctx) => {
             fs.writeFileSync(path.join(__dirname, 'aba_qr.jpg'), buffer);
             fs.writeFileSync(path.join(__dirname, 'khqr.jpg'), buffer);
             console.log('✅ Mode 1 QR photo updated live on disk & memory!');
+            // Also persist to Supabase so this survives the next redeploy —
+            // Render's disk is ephemeral and rebuilds fresh from git on
+            // every deploy, otherwise silently wiping this file.
+            await saveMode1QrPhotoToSupabase(buffer);
         } catch (e) {
             console.error('⚠️ Could not write QR photo to disk:', e.message);
         }
@@ -2618,6 +2668,7 @@ bot.on('photo', async (ctx) => {
         return ctx.replyWithHTML(
             `✅ <b>បានផ្លាស់ប្តូររូបថត QR សម្រាប់ Mode 1 រួចរាល់ 100%!</b>\n----------------------------------------\n\n` +
             `🖼️ <b>រូបថត QR ថ្មីត្រូវ បានរក្សាទុក និង បើកដំណើការភ្លាមៗ! 🚀</b>\n` +
+            `💾 <b>រក្សាទុកអចិន្ត្រៃយ៍ — មិនបាត់ទោះបី Redeploy ក៏ដោយ!</b>\n` +
             `អតិថិជនដែលប្រើប្រាស់ Mode 1 នឹងទទួលបានរូបថត QR ថ្មីនេះដើម្បីស្កែនទូទាត់ប្រាក់។`,
             getAdminSettingsKeyboard()
         );

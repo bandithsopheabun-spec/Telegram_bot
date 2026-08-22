@@ -41,3 +41,15 @@ CREATE TABLE IF NOT EXISTS public.deposits (
 -- in index.js) — without this column a real customer payment made while the
 -- server happened to restart would never get auto-credited.
 ALTER TABLE public.deposits ADD COLUMN IF NOT EXISTS md5_hash TEXT;
+
+-- 4. Bot Settings Table — small generic key/value store for admin-editable
+-- settings that need to survive a redeploy, where Render's filesystem is
+-- ephemeral (rebuilt fresh from git on every deploy — anything written to
+-- local disk at runtime, like the Mode 1 QR photo, is lost). Currently used
+-- to persist the base64-encoded Mode 1 QR photo (key: 'mode1_qr_photo'),
+-- rehydrated back to disk on boot by rehydrateMode1QrPhoto() in index.js.
+CREATE TABLE IF NOT EXISTS public.bot_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);

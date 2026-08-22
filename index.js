@@ -2208,8 +2208,14 @@ bot.on('text', async (ctx, next) => {
 
         delete userState[userId];
 
-        // Record Deposit in Supabase DB
-        if (supabase) {
+        // Record Deposit in Supabase DB — only for the hands-off auto modes
+        // (BAKONG/ACLEDA), where the background poller/webhook needs the row
+        // to exist and payment can arrive without the customer clicking
+        // anything. Manual/PayWay only record it once the customer actually
+        // taps "I Have Paid" (see confirm_dep below) — merely opening the
+        // deposit tab and getting a QR shouldn't create a Pending record
+        // that then has to be manually cleared if they never pay.
+        if (supabase && (depositMode === 'BAKONG' || depositMode === 'AUTO')) {
             try {
                 await supabase.from('deposits').insert([{
                     deposit_id: depositId,
@@ -3997,9 +4003,23 @@ bot.action(/^confirm_dep/, async (ctx) => {
         }
     }
 
+    // This is the actual "commit" moment for Manual/PayWay deposits — the
+    // customer has confirmed they paid, so only NOW does it become a real
+    // Pending record (see AWAITING_DEPOSIT_AMOUNT above, which skips the
+    // insert for these modes at QR-generation time). upsert since a row may
+    // already exist if the mode was switched after the QR was generated.
+    if (supabase) {
+        try {
+            await supabase.from('deposits').upsert([{
+                deposit_id: depId, telegram_id: userId,
+                amount, bonus, status: 'Pending'
+            }], { onConflict: 'deposit_id' });
+        } catch (e) {}
+    }
+
     // Notify Admin Group with 1-Click Approval buttons
     const isPayWayMode = depositMode === 'PAYWAY';
-    const adminNotifyMsg = 
+    const adminNotifyMsg =
         `💳 <b>NEW DEPOSIT SUBMITTED (${isPayWayMode ? 'Mode 3: ABA PayWay Link' : 'Mode 1: Admin Approval'})</b>\n` +
         `----------------------------------------\n` +
         `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
@@ -4630,15 +4650,6 @@ http.createServer(async (req, res) => {
             const bonusAmount = (amount * bonusPercent) / 100;
             const depositId = `DEP${Math.floor(100000 + Math.random() * 900000)}`;
 
-            if (supabase) {
-                try {
-                    await supabase.from('deposits').insert([{
-                        deposit_id: depositId, telegram_id: sessionUserId,
-                        amount, bonus: bonusAmount, status: 'Pending'
-                    }]);
-                } catch (e) {}
-            }
-
             // Mirror the bot's own deposit flow exactly: only Mode 2 (AUTO /
             // ACLEDA) and Mode 4 (BAKONG) are hands-off, background-polled by
             // the auto-payment engine. Mode 1 (MANUAL) and Mode 3 (PAYWAY)
@@ -4648,6 +4659,21 @@ http.createServer(async (req, res) => {
             // pendingAutoDeposits would just burn Bakong's scarce daily quota
             // checking transactions a human is going to settle anyway.
             const isAutoMode = depositMode === 'BAKONG' || depositMode === 'AUTO';
+
+            // Only record a Pending row now for the auto modes, where the
+            // background poller needs it and payment can arrive with no
+            // further click. Manual/PayWay only become a real Pending record
+            // once the customer taps "I Have Paid" (POST .../confirm below)
+            // — merely generating a QR shouldn't leave a stale Pending row
+            // behind if the customer never actually pays.
+            if (supabase && isAutoMode) {
+                try {
+                    await supabase.from('deposits').insert([{
+                        deposit_id: depositId, telegram_id: sessionUserId,
+                        amount, bonus: bonusAmount, status: 'Pending'
+                    }]);
+                } catch (e) {}
+            }
 
             // Generate the QR the same way the bot itself does for the
             // current mode — different modes use different merchant
@@ -4708,6 +4734,20 @@ http.createServer(async (req, res) => {
                 return sendJson(res, 409, { error: 'already_processed' });
             }
             processedDepositIds.add(depositId);
+
+            // This is the actual "commit" moment for Manual/PayWay deposits
+            // — the customer confirmed they paid, so only NOW does it become
+            // a real Pending record (POST /api/deposits above skips the
+            // insert for these modes). upsert since a row may already exist
+            // if the mode was switched after the QR was generated.
+            if (supabase) {
+                try {
+                    await supabase.from('deposits').upsert([{
+                        deposit_id: depositId, telegram_id: sessionUserId,
+                        amount, bonus: bonusAmount, status: 'Pending'
+                    }], { onConflict: 'deposit_id' });
+                } catch (e) {}
+            }
 
             let customerName = 'Website Customer';
             try {

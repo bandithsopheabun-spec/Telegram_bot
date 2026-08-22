@@ -583,14 +583,22 @@ async function generateRealDeposit(amount) {
         const qrImg = document.getElementById('qrImage');
         const statusText = document.getElementById('qrStatusText');
         const confirmBtn = document.getElementById('btnConfirmPaid');
+        const badge = document.getElementById('khqrBadge');
 
         label.textContent = `$${dep.amount.toFixed(2)} USD`;
         card.classList.remove('hidden');
+        // Badge label reflects the actual mode/QR shown — avoids claiming
+        // "Bakong KHQR" while displaying a Manual-mode admin QR photo.
+        const badgeByMode = { BAKONG: 'Bakong KHQR', AUTO: 'ACLEDA KHQR', MANUAL: 'KHQR', PAYWAY: 'ABA PayWay' };
+        badge.textContent = badgeByMode[dep.depositMode] || 'KHQR';
 
         // Server-generated QR image (same api.qrserver.com approach the Telegram
         // bot itself uses) — avoids relying on a third-party client-side JS
         // library that tracking-prevention browsers/extensions silently block.
-        qrImg.src = dep.qrImageUrl;
+        // If the admin uploaded a real static QR photo for Mode 1 (Manual),
+        // show that exact image instead of a generated one — matches what
+        // the customer would see in the Telegram chat.
+        qrImg.src = dep.customQrImageUrl || dep.qrImageUrl;
 
         appState.activeDepositId = dep.depositId;
         appState.activeDepositAmount = dep.amount;

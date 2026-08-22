@@ -4562,9 +4562,28 @@ http.createServer(async (req, res) => {
             // checking transactions a human is going to settle anyway.
             const isAutoMode = depositMode === 'BAKONG' || depositMode === 'AUTO';
 
-            let dynamicQrData = await fetchBakongApiKhqrString(bakongAccountId || 'lasa_leng@aclb', amount, depositId);
-            if (!dynamicQrData) {
-                dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
+            // Generate the QR the same way the bot itself does for the
+            // current mode — different modes use different merchant
+            // accounts/labels, and Mode 1 (Manual) may have a real,
+            // admin-uploaded static QR photo that should take priority over
+            // any generated one (see /api/deposits/mode1-qr-image above).
+            let dynamicQrData;
+            let customQrImageUrl = null;
+            if (depositMode === 'BAKONG') {
+                dynamicQrData = await fetchBakongApiKhqrString(bakongAccountId || 'lasa_leng@aclb', amount, depositId);
+                if (!dynamicQrData) {
+                    dynamicQrData = generateDynamicKhqr(bakongAccountId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
+                }
+            } else if (depositMode === 'AUTO') {
+                dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME_UPPER, amount, depositId);
+            } else {
+                // MANUAL (Mode 1) / PAYWAY (Mode 3) — same default QR source
+                // as the bot's own Mode 1 flow.
+                dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
+                const possibleQrFiles = ['manual_qr.jpg', 'manual_qr.png', 'aba_qr.jpg', 'aba_qr.png', 'khqr.jpg', 'khqr.png'];
+                if (possibleQrFiles.some(f => fs.existsSync(path.join(__dirname, f)))) {
+                    customQrImageUrl = `/api/deposits/mode1-qr-image?t=${Date.now()}`;
+                }
             }
             const md5Hash = require('crypto').createHash('md5').update(dynamicQrData).digest('hex');
             if (isAutoMode) {
@@ -4576,7 +4595,8 @@ http.createServer(async (req, res) => {
                 depositMode,
                 requiresManualConfirm: !isAutoMode,
                 qrString: dynamicQrData,
-                qrImageUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(dynamicQrData)}`
+                qrImageUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(dynamicQrData)}`,
+                customQrImageUrl
             });
         }
 
@@ -4635,6 +4655,28 @@ http.createServer(async (req, res) => {
             }
 
             return sendJson(res, 200, { status: 'pending_admin_approval' });
+        }
+
+        // Serves the admin's custom-uploaded Mode 1 QR photo (Admin Menu >
+        // Bot Settings > "🖼️ Change Mode 1 QR Photo" — saved to disk as
+        // manual_qr.jpg/.png etc., same file the bot chat itself sends). No
+        // session required: this is the same image any customer sees in the
+        // Telegram chat, not sensitive data.
+        if (apiPath === '/api/deposits/mode1-qr-image' && req.method === 'GET') {
+            const possibleQrFiles = ['manual_qr.jpg', 'manual_qr.png', 'aba_qr.jpg', 'aba_qr.png', 'khqr.jpg', 'khqr.png'];
+            const localQr = possibleQrFiles.find(f => fs.existsSync(path.join(__dirname, f)));
+            if (!localQr) {
+                return sendJson(res, 404, { error: 'no_custom_qr' });
+            }
+            const ext = path.extname(localQr).toLowerCase();
+            const contentType = ext === '.png' ? 'image/png' : 'image/jpeg';
+            try {
+                const buffer = fs.readFileSync(path.join(__dirname, localQr));
+                res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store' });
+                return res.end(buffer);
+            } catch (e) {
+                return sendJson(res, 500, { error: 'read_failed' });
+            }
         }
 
         return sendJson(res, 404, { error: 'not_found' });

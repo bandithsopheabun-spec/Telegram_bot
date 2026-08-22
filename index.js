@@ -4659,9 +4659,10 @@ http.createServer(async (req, res) => {
 
         // Serves the admin's custom-uploaded Mode 1 QR photo (Admin Menu >
         // Bot Settings > "🖼️ Change Mode 1 QR Photo" — saved to disk as
-        // manual_qr.jpg/.png etc., same file the bot chat itself sends). No
-        // session required: this is the same image any customer sees in the
-        // Telegram chat, not sensitive data.
+        // manual_qr.jpg/.png etc., same file the bot chat itself sends).
+        // Requires a logged-in session (falls under the /api/ gate above)
+        // just like every other deposit endpoint, though the image itself
+        // isn't sensitive — any customer already sees it in the Telegram chat.
         if (apiPath === '/api/deposits/mode1-qr-image' && req.method === 'GET') {
             const possibleQrFiles = ['manual_qr.jpg', 'manual_qr.png', 'aba_qr.jpg', 'aba_qr.png', 'khqr.jpg', 'khqr.png'];
             const localQr = possibleQrFiles.find(f => fs.existsSync(path.join(__dirname, f)));

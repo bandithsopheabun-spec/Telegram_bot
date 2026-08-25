@@ -155,6 +155,160 @@ async function checkAcledaTransaction(depositId, amount) {
     }
 }
 
+// ============= WING BANK KHQR API (Mode 5 — Auto-Payment, Unlimited Rate Limit) =============
+// Unlike NBC's public Bakong Open API (100 req/day hard cap — see
+// BAKONG_DAILY_CALL_BUDGET below, the actual cause of today's recurring
+// "Daily request limit exceeded" incidents), Wing's OnlineSDK-KHQR API
+// (openapi.wingbank.com.kh) documents every endpoint as
+// "x-throttling-tier": "Unlimited" and pushes a webhook on successful
+// payment instead of requiring polling — this is the intended long-term
+// replacement. Inactive (falls through to nothing) until WING_CLIENT_ID/
+// WING_CLIENT_SECRET are set, which Wing issues after the Corporate Partner
+// Checklist documents are submitted and approved.
+//
+// ⚠️ The AES-256-GCM byte layout below (ciphertext + authTag, then base64)
+// is a best-effort reading of Wing's spec, which doesn't explicitly say how
+// the GCM auth tag is transmitted. Verify against Wing's Sandbox
+// (openapi.wingbank.com.kh "Go to Sandbox") before relying on this in
+// production — a real API response there is the only way to confirm this
+// interpretation matches what Wing's server expects.
+let wingClientId = process.env.WING_CLIENT_ID || '';
+let wingClientSecret = process.env.WING_CLIENT_SECRET || '';
+const WING_API_BASE = process.env.WING_API_BASE || 'https://openapi.wingbank.com.kh';
+let wingTokenCache = { accessToken: null, expiresAt: 0 };
+
+// Wing's spec: IV = first 12 chars of client_id; Key = client_id padded
+// with trailing '0' to exactly 32 chars (or truncated if longer) — a fixed
+// 32-byte key for AES-256.
+function wingDeriveIvKey(clientId) {
+    const iv = Buffer.from(clientId.slice(0, 12), 'utf8');
+    const key = Buffer.from(clientId.padEnd(32, '0').slice(0, 32), 'utf8');
+    return { iv, key };
+}
+
+function wingAesEncrypt(plainText, clientId) {
+    const { iv, key } = wingDeriveIvKey(clientId);
+    const cipher = require('crypto').createCipheriv('aes-256-gcm', key, iv);
+    const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    return Buffer.concat([encrypted, authTag]).toString('base64');
+}
+
+// X-Payload-Hash header per Wing's documented formula:
+// Sha256(B64(AES256(B64(client_id#amount#currency#order_ref#return_url#cancel_url#timestamp))))
+function wingBuildPayloadHash({ clientId, amount, currency, orderRef, returnUrl, cancelUrl, timestamp }) {
+    const concat = `${clientId}#${amount}#${currency}#${orderRef}#${returnUrl}#${cancelUrl || ''}#${timestamp}`;
+    const b64Concat = Buffer.from(concat, 'utf8').toString('base64');
+    const aesResult = wingAesEncrypt(b64Concat, clientId); // already base64
+    return require('crypto').createHash('sha256').update(aesResult, 'utf8').digest('hex');
+}
+
+// OAuth2 client_credentials token, cached for its ~60min lifetime (refreshed
+// 5 minutes early to avoid a request racing an expiry).
+async function getWingAccessToken() {
+    if (!wingClientId || !wingClientSecret) return null;
+    const now = Date.now();
+    if (wingTokenCache.accessToken && wingTokenCache.expiresAt - now > 5 * 60 * 1000) {
+        return wingTokenCache.accessToken;
+    }
+    try {
+        const body = new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: wingClientId,
+            client_secret: wingClientSecret,
+            scope: 'partner:standard'
+        });
+        const res = await fetch(`${WING_API_BASE}/idp/v1/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body.toString()
+        });
+        const data = await res.json();
+        if (!data.access_token) return null;
+        wingTokenCache = { accessToken: data.access_token, expiresAt: now + (data.expires_in || 3600) * 1000 };
+        return data.access_token;
+    } catch (e) {
+        console.error('⚠️ Wing getAccessToken error:', e.message);
+        return null;
+    }
+}
+
+// Generates a Wing hosted-KHQR payment page for the given deposit. Returns
+// the web_payment_url the customer should open (same "tap to pay" pattern
+// as ABA PayWay's Mode 3 — Wing's API returns a checkout link, not a raw
+// KHQR string), or null on failure.
+async function generateWingPaymentUrl(amount, orderRef) {
+    const token = await getWingAccessToken();
+    if (!token) return null;
+
+    const baseUrl = (process.env.WEB_APP_URL || '').replace(/\/$/, '');
+    const returnUrl = `${baseUrl}/wing-return`;
+    const cancelUrl = `${baseUrl}/wing-cancel`;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const currency = 'USD';
+    const cleanOrderRef = orderRef.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 24);
+    const amountStr = parseFloat(amount).toFixed(2);
+
+    const requestPayload = {
+        amount: amountStr,
+        currency,
+        order_reference_no: cleanOrderRef,
+        return_url: returnUrl,
+        cancel_url: cancelUrl,
+        merchant_name: BRAND_NAME,
+        timestamp,
+        additional_data: ''
+    };
+
+    const payloadHash = wingBuildPayloadHash({
+        clientId: wingClientId, amount: amountStr, currency,
+        orderRef: cleanOrderRef, returnUrl, cancelUrl, timestamp
+    });
+
+    try {
+        const res = await fetch(`${WING_API_BASE}/generate/khqr`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'x-payload-hash': payloadHash
+            },
+            body: JSON.stringify({ payload: wingAesEncrypt(JSON.stringify(requestPayload), wingClientId) })
+        });
+        const data = await res.json();
+        if (data.code === 'SUCCESS' && data.data && data.data.web_payment_url) {
+            return data.data.web_payment_url;
+        }
+        console.error('⚠️ Wing generateKHQR failed:', JSON.stringify(data));
+        return null;
+    } catch (e) {
+        console.error('⚠️ Wing generateKHQR error:', e.message);
+        return null;
+    }
+}
+
+// Pull-based fallback (the webhook at POST /wing-webhook is the primary,
+// push-based path — see startAutoPaymentEngine).
+async function checkWingTransaction(orderRef) {
+    const token = await getWingAccessToken();
+    if (!token) return false;
+    try {
+        const cleanOrderRef = orderRef.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 24);
+        const res = await fetch(`${WING_API_BASE}/inquiry/khqr/success`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ order_reference_no: cleanOrderRef })
+        });
+        if (res.status === 404) return false;
+        const data = await res.json();
+        return !!(data && data.data && data.data.transaction_id);
+    } catch (e) {
+        console.error('⚠️ Wing inquiry error:', e.message);
+        return false;
+    }
+}
+
 // Dynamic EMVCo KHQR Generator Helper with CRC16 Checksum for Bakong & ACLEDA
 function crc16(str) {
     let crc = 0xFFFF;
@@ -465,17 +619,63 @@ function canCallBakongApi() {
     return bakongApiCallsToday < BAKONG_DAILY_CALL_BUDGET;
 }
 
+// Shared success path for any auto-payment channel (Bakong, ACLEDA, Wing
+// inquiry fallback) — credits the balance, updates Supabase, and notifies
+// both the customer and the admin channel identically regardless of which
+// API actually confirmed the payment.
+async function autoCreditDeposit(depId, item) {
+    delete pendingAutoDeposits[depId];
+    const userId = item.userId;
+    const currentBal = getBalance(userId);
+    const newBal = currentBal + item.totalCredit;
+    await dbUpdateBalance(userId, newBal);
+
+    if (supabase) {
+        try {
+            await supabase.from('deposits').update({ status: 'Approved (Auto-Paid)' }).eq('deposit_id', depId);
+        } catch (e) {}
+    }
+
+    const uLang = getLang(userId);
+    const autoSuccessMsg = uLang === 'en' ?
+        `🎉 <b>Auto-Payment Successful!</b>\n` +
+        `----------------------------------------\n` +
+        `💳 <b>Deposit Amount:</b> $${item.amount.toFixed(2)} USD\n` +
+        `🎁 <b>Bonus Added:</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
+        `💰 <b>New Balance:</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
+        `⚡ <i>Your wallet has been automatically credited! You can place orders now.</i>` :
+        `🎉 <b>ទូទាត់ប្រាក់ជោគជ័យស្វ័យប្រវត្តិ (Auto-Payment Successful)!</b>\n` +
+        `----------------------------------------\n` +
+        `💳 <b>ចំនួនប្រាក់ទូទាត់ ៖</b> $${item.amount.toFixed(2)} USD\n` +
+        `🎁 <b>Bonus ទទួលបាន ៖</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
+        `💰 <b>តុល្យភាពបច្ចុប្បន្ន ៖</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
+        `⚡ <i>ប្រព័ន្ធបានបញ្ចូលលុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% រួចរាល់ហើយ!</i>`;
+
+    try {
+        await bot.telegram.sendMessage(userId, autoSuccessMsg, { parse_mode: 'HTML' });
+    } catch (e) {}
+
+    const channelMsg =
+        `⚡ <b>AUTO-PAYMENT APPROVED (100% Automated)!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
+        `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+        `💵 <b>Amount:</b> $${item.amount.toFixed(2)} USD\n` +
+        `🎁 <b>Bonus:</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
+        `💰 <b>Total Credited:</b> $${item.totalCredit.toFixed(2)} USD\n` +
+        `🟢 <b>Status:</b> Auto-Approved ⚡`;
+
+    try {
+        await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, channelMsg, { parse_mode: 'HTML' });
+    } catch (e) {}
+}
+
 let autoPayInterval = null;
 function startAutoPaymentEngine() {
     if (autoPayInterval) return;
     autoPayInterval = setInterval(async () => {
         const depKeys = Object.keys(pendingAutoDeposits);
         if (depKeys.length === 0) return;
-
-        if (!canCallBakongApi()) {
-            console.log('⚠️ Bakong API daily call budget reached — skipping this auto-payment cycle (deposits stay Pending until admin approves or tomorrow).');
-            return;
-        }
 
         const now = Date.now();
         for (const depId of depKeys) {
@@ -495,58 +695,28 @@ function startAutoPaymentEngine() {
             // the check.
             if (item.mode === 'PAYWAY') continue;
 
-            // Check Bakong & ACLEDA Open APIs in background
+            // Wing has its own "Unlimited" rate tier (unlike Bakong's
+            // 100/day) and its own webhook (POST /wing-webhook, the primary
+            // path) — this inquiry call is purely a fallback in case that
+            // webhook is ever missed, so it must never be gated by Bakong's
+            // budget below.
+            if (item.mode === 'WING') {
+                if (await checkWingTransaction(depId)) {
+                    await autoCreditDeposit(depId, item);
+                }
+                continue;
+            }
+
+            // BAKONG / ACLEDA (or legacy entries with no mode tag) — gated
+            // by Bakong's daily call budget since checkBakongTransaction is
+            // always attempted here.
+            if (!canCallBakongApi()) continue;
             bakongApiCallsToday++;
             const isBakongVerified = await checkBakongTransaction(item.md5Hash);
             const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, item.amount) : false;
 
             if (isBakongVerified || isAcledaVerified) {
-                delete pendingAutoDeposits[depId];
-                const userId = item.userId;
-                const currentBal = getBalance(userId);
-                const newBal = currentBal + item.totalCredit;
-                await dbUpdateBalance(userId, newBal);
-
-                if (supabase) {
-                    try {
-                        await supabase.from('deposits').update({ status: 'Approved (Auto-Paid)' }).eq('deposit_id', depId);
-                    } catch (e) {}
-                }
-
-                // AUTOMATICALLY NOTIFY CUSTOMER INSTANTLY!
-                const uLang = getLang(userId);
-                const autoSuccessMsg = uLang === 'en' ?
-                    `🎉 <b>Auto-Payment Successful!</b>\n` +
-                    `----------------------------------------\n` +
-                    `💳 <b>Deposit Amount:</b> $${item.amount.toFixed(2)} USD\n` +
-                    `🎁 <b>Bonus Added:</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
-                    `💰 <b>New Balance:</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
-                    `⚡ <i>Your wallet has been automatically credited! You can place orders now.</i>` :
-                    `🎉 <b>ទូទាត់ប្រាក់ជោគជ័យស្វ័យប្រវត្តិ (Auto-Payment Successful)!</b>\n` +
-                    `----------------------------------------\n` +
-                    `💳 <b>ចំនួនប្រាក់ទូទាត់ ៖</b> $${item.amount.toFixed(2)} USD\n` +
-                    `🎁 <b>Bonus ទទួលបាន ៖</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
-                    `💰 <b>តុល្យភាពបច្ចុប្បន្ន ៖</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
-                    `⚡ <i>ប្រព័ន្ធបានបញ្ចូលលុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% រួចរាល់ហើយ!</i>`;
-
-                try {
-                    await bot.telegram.sendMessage(userId, autoSuccessMsg, { parse_mode: 'HTML' });
-                } catch (e) {}
-
-                // NOTIFY ADMIN CHANNEL (-1003953732694)
-                const channelMsg = 
-                    `⚡ <b>AUTO-PAYMENT APPROVED (100% Automated)!</b>\n` +
-                    `----------------------------------------\n` +
-                    `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
-                    `📲 <b>User ID:</b> <code>${userId}</code>\n` +
-                    `💵 <b>Amount:</b> $${item.amount.toFixed(2)} USD\n` +
-                    `🎁 <b>Bonus:</b> +$${item.bonusAmount.toFixed(2)} USD\n` +
-                    `💰 <b>Total Credited:</b> $${item.totalCredit.toFixed(2)} USD\n` +
-                    `🟢 <b>Status:</b> Auto-Approved ⚡`;
-
-                try {
-                    await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, channelMsg, { parse_mode: 'HTML' });
-                } catch (e) {}
+                await autoCreditDeposit(depId, item);
             }
         }
     }, 60000); // 60s, not 7s — see BAKONG_DAILY_CALL_BUDGET comment above
@@ -2339,6 +2509,54 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(paywayMsg, initialKb);
         }
 
+        if (depositMode === 'WING') {
+            const isKm = lang === 'km';
+
+            if (!wingClientId || !wingClientSecret) {
+                delete userState[userId];
+                return ctx.replyWithHTML(
+                    isKm
+                        ? `⚠️ <b>Wing Payment មិនទាន់ត្រូវបានកំណត់ (Not Configured) ទេ — សូមទាក់ទង Admin!</b>`
+                        : `⚠️ <b>Wing Payment is not configured yet — please contact Admin!</b>`
+                );
+            }
+
+            const wingUrl = await generateWingPaymentUrl(amount, depositId);
+            if (!wingUrl) {
+                delete userState[userId];
+                return ctx.replyWithHTML(
+                    isKm
+                        ? `⚠️ <b>មិនអាចបង្កើត Wing Payment Link បានទេ — សូមសាកល្បងម្តងទៀត ឬទាក់ទង Admin!</b>`
+                        : `⚠️ <b>Could not generate a Wing payment link — please try again or contact Admin!</b>`
+                );
+            }
+
+            const md5Hash = require('crypto').createHash('md5').update(depositId).digest('hex'); // Wing verifies by order_reference_no, not md5 — this is just a stable key for pendingAutoDeposits.
+            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash, 'WING');
+
+            const wingMsg = isKm ?
+                `🟠 <b>ទូទាត់តាម Wing Bank (KHQR)</b>\n----------------------------------------\n\n` +
+                `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
+                (bonusAmount > 0 ? `🎁 <b>Bonus ថែមជូន (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+                `🆔 <b>លេខ Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `📲 <b>សូមចុចប៊ូតុង [ 🟠 ទូទាត់តាម Wing ] ខាងក្រោមដើម្បីទូទាត់ប្រាក់ ៖</b>\n` +
+                `⚡ <i>ប្រព័ន្ធនឹងទម្លាក់លុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% ភ្លាមៗបន្ទាប់ពីទូទាត់ជោគជ័យ!</i>` :
+
+                `🟠 <b>Payment via Wing Bank (KHQR)</b>\n----------------------------------------\n\n` +
+                `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+                (bonusAmount > 0 ? `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+                `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `📲 <b>Click the button [ 🟠 Pay via Wing ] below to make payment:</b>\n` +
+                `⚡ <i>Your wallet will be credited automatically the instant payment succeeds!</i>`;
+
+            const wingKb = Markup.inlineKeyboard([
+                [Markup.button.url(isKm ? '🟠 ទូទាត់តាម Wing ⚡' : '🟠 Pay via Wing ⚡', wingUrl)],
+                [Markup.button.callback(isKm ? '❌ បោះបង់ការទូទាត់' : '❌ Cancel Payment', `cancel_dep_${depositId}`)]
+            ]);
+
+            return ctx.replyWithHTML(wingMsg, wingKb);
+        }
+
         if (depositMode === 'AUTO') {
             const acledaAutoMsg = 
                 `🏦 <b>ACLEDA Bank Auto-Payment ( ACLEDA API Verified ⚡ )</b>\n` +
@@ -2510,6 +2728,28 @@ bot.on('text', async (ctx, next) => {
         delete userState[userId];
         const masked = `${newToken.slice(0, 8)}...${newToken.slice(-6)}`;
         return ctx.replyWithHTML(`✅ <b>បានរក្សាទុក ACLEDA API Token (<code>${masked}</code>) និង បើកដំណើការ ACLEDA Auto-Pay ដោយជោគជ័យ!</b>`, getAdminSettingsKeyboard());
+    }
+
+    if (state.step === 'AWAITING_ADMIN_WING_CLIENT_ID') {
+        wingClientId = text.trim();
+        userState[userId] = { step: 'AWAITING_ADMIN_WING_CLIENT_SECRET' };
+        return ctx.replyWithHTML(
+            `✅ <b>បានរក្សាទុក Wing Client ID រួចរាល់!</b>\n\n` +
+            `✍️ <b>ជំហានទី ២៖</b> សូមផ្ញើ <b>Wing Client Secret</b> ថែមមួយទៀត ៖`,
+            Markup.keyboard([['🔐 Admin Menu']]).resize()
+        );
+    }
+
+    if (state.step === 'AWAITING_ADMIN_WING_CLIENT_SECRET') {
+        wingClientSecret = text.trim();
+        wingTokenCache = { accessToken: null, expiresAt: 0 }; // force a fresh token with the new credentials
+        delete userState[userId];
+        return ctx.replyWithHTML(
+            `✅ <b>បានរក្សាទុក Wing Client ID + Secret ដោយជោគជ័យ!</b>\n\n` +
+            `⚠️ <i>Credentials នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variables ` +
+            `<code>WING_CLIENT_ID</code> និង <code>WING_CLIENT_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>`,
+            getAdminSettingsKeyboard()
+        );
     }
 
     if (state.step === 'AWAITING_ADMIN_HOWTO_LINK') {
@@ -3152,12 +3392,14 @@ function getAdminSettingsKeyboard() {
     if (depositMode === 'AUTO') modeBtn = `💳 Mode: ⚡ 2. Auto Payments ( ACLEDA API )`;
     if (depositMode === 'PAYWAY') modeBtn = `💳 Mode: 🏦 3. ABA PayWay ( Auto Payments )`;
     if (depositMode === 'BAKONG') modeBtn = `💳 Mode: 🇰🇭 4. Bakong KHQR ( Auto Payments )`;
+    if (depositMode === 'WING') modeBtn = `💳 Mode: 🟠 5. Wing KHQR ( Unlimited Auto Payments )`;
 
     return Markup.keyboard([
         [modeBtn],
         ['🖼️ · Change Mode1 QR Photo', '🏦 · PayWay Link'],
         [isAcledaPaymentOn ? '🏦 ACLEDA Auto-Pay: ✅ ON' : '🏦 ACLEDA Auto-Pay: ❌ OFF', '🔑 · Edit ACLEDA Token'],
         [isBakongPaymentOn ? '🏦 Bakong Payment: ✅ ON' : '🏦 Bakong Payment: ❌ OFF', '🇰🇭 · Edit Bakong ID'],
+        [`🟠 Wing: ${wingClientId ? '✅ Configured' : '❌ Not Set'}`, '🔑 · Edit Wing Credentials'],
         ['🔐 Admin Menu']
     ]).resize();
 }
@@ -3469,8 +3711,8 @@ bot.hears(['📊 · Bot metrics', 'Bot metrics'], async (ctx) => {
     ctx.replyWithHTML(metricsMsg, adminAnalyticsKeyboard);
 });
 
-// 💳 DEPOSIT MODE CYCLE TOGGLE ( 1. តម្រូវអនុម័ត -> 2. ACLEDA API -> 3. ABA PayWay -> 4. Bakong KHQR -> 1. តម្រូវអនុម័ត )
-bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័ត/i, /2. Auto Payments/i, /3. ABA PayWay/i, /4. Bakong KHQR/i], (ctx) => {
+// 💳 DEPOSIT MODE CYCLE TOGGLE ( 1. តម្រូវអនុម័ត -> 2. ACLEDA API -> 3. ABA PayWay -> 4. Bakong KHQR -> 5. Wing KHQR -> 1. តម្រូវអនុម័ត )
+bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័ត/i, /2. Auto Payments/i, /3. ABA PayWay/i, /4. Bakong KHQR/i, /5. Wing KHQR/i], (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
 
@@ -3483,6 +3725,9 @@ bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័
     } else if (depositMode === 'PAYWAY') {
         depositMode = 'BAKONG';
         isInstantAutoDepositOn = true;
+    } else if (depositMode === 'BAKONG') {
+        depositMode = 'WING';
+        isInstantAutoDepositOn = true;
     } else {
         depositMode = 'MANUAL';
         isInstantAutoDepositOn = false;
@@ -3492,8 +3737,14 @@ bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័
     if (depositMode === 'AUTO') modeTitle = '⚡ 2. Auto Payments ( ACLEDA API Token Pending Notice Card )';
     if (depositMode === 'PAYWAY') modeTitle = '🏦 3. ABA PayWay Merchant ( Direct PayWay Link Auto-Payment )';
     if (depositMode === 'BAKONG') modeTitle = '🇰🇭 4. Bakong KHQR ( National Bank Bakong Open API Auto Payment )';
+    if (depositMode === 'WING') modeTitle = '🟠 5. Wing KHQR ( Unlimited Rate Tier, Webhook Auto Payment )';
 
-    ctx.replyWithHTML(`✅ <b>កែប្រែរបៀបទូទាត់ប្រាក់ទៅជា ៖ ${modeTitle}</b>`, getAdminSettingsKeyboard());
+    let extraNote = '';
+    if (depositMode === 'WING' && !wingClientId) {
+        extraNote = `\n\n⚠️ <i>Wing Client ID/Secret មិនទាន់កំណត់ទេ — សូមចុច "🔑 · Edit Wing Credentials" ជាមុនសិន បើមិនដូច្នេះទេ អតិថិជននឹងទទួលបានសារ Error ពេលព្យាយាមទូទាត់!</i>`;
+    }
+
+    ctx.replyWithHTML(`✅ <b>កែប្រែរបៀបទូទាត់ប្រាក់ទៅជា ៖ ${modeTitle}</b>${extraNote}`, getAdminSettingsKeyboard());
 });
 
 // ✏️ EDIT BONUS PERCENTAGE RATE (%)
@@ -3561,6 +3812,21 @@ bot.hears(['🔑 · Edit ACLEDA Token', 'Edit ACLEDA Token'], (ctx) => {
         `🔑 <b>កែប្រែ ACLEDA Bank API Token ៖</b>\n\n` +
         `📋 Token បច្ចុប្បន្ន ៖ <code>${maskedToken}</code>\n\n` +
         `✍️ សូមផ្ញើ ACLEDA API Token ថ្មីរបស់អ្នក ( ដែលទទួលបានពី ACLEDA Bank ) ៖`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🟠 EDIT WING CLIENT ID / SECRET (two-step: ID then Secret)
+bot.hears(['🔑 · Edit Wing Credentials', 'Edit Wing Credentials'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_WING_CLIENT_ID' };
+    const maskedId = wingClientId ? `${wingClientId.slice(0, 6)}...${wingClientId.slice(-4)}` : 'Not Set';
+    const prompt =
+        `🟠 <b>កែប្រែ Wing Bank API Credentials ៖</b>\n\n` +
+        `📋 Client ID បច្ចុប្បន្ន ៖ <code>${maskedId}</code>\n\n` +
+        `✍️ <b>ជំហានទី ១៖</b> សូមផ្ញើ <b>Wing Client ID</b> ថ្មី ( ទទួលបានពី openapi.wingbank.com.kh ) ៖`;
 
     ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
 });
@@ -4996,6 +5262,60 @@ http.createServer(async (req, res) => {
         }
 
         return sendJson(res, 404, { error: 'not_found' });
+    }
+
+    // Wing Bank webhook — the primary, push-based path for Mode 5 (WING).
+    // Configured as the "Callback URL (Webhook)" in Wing's Open API
+    // Marketplace onboarding form. Sent once only, no retries on failure —
+    // see checkWingTransaction/startAutoPaymentEngine for the pull-based
+    // fallback that covers a missed delivery.
+    if (req.url && req.url.startsWith('/wing-webhook') && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', async () => {
+            console.log('🔔 Received Wing Webhook POST:', body);
+            try {
+                let data = {};
+                try { data = JSON.parse(body); } catch (e) {}
+                const depId = data.order_reference_no;
+                const item = depId && pendingAutoDeposits[depId];
+
+                if (item) {
+                    // Validate the paid amount is at least the expected price —
+                    // per Wing's own doc: "must reject every transaction that
+                    // responds with an amount less than your product/service price."
+                    const paidAmount = parseFloat(data.total_amount || data.amount || 0);
+                    if (paidAmount >= item.amount - 0.001) {
+                        await autoCreditDeposit(depId, item);
+                    } else {
+                        console.error(`⚠️ Wing webhook amount mismatch for ${depId}: expected $${item.amount}, got $${paidAmount}`);
+                    }
+                }
+            } catch (err) {
+                console.error('⚠️ Wing webhook process error:', err.message);
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ code: '200', message: 'Push callback is successfully received.' }));
+        });
+        return;
+    }
+
+    // Wing return/cancel — the browser lands here after the customer
+    // finishes (or cancels) Wing's hosted KHQR checkout page. The webhook
+    // above is what actually credits the balance; these are just friendly
+    // "you can close this tab / go back to Telegram" pages.
+    if (req.url && (req.url.startsWith('/wing-return') || req.url.startsWith('/wing-cancel'))) {
+        const isReturn = req.url.startsWith('/wing-return');
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${BRAND_NAME}</title>
+<style>body{font-family:sans-serif;background:#0f1115;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:20px}
+.card{max-width:420px}h1{font-size:1.4rem}p{color:#aaa}</style></head>
+<body><div class="card">
+<h1>${isReturn ? '✅ ការទូទាត់បានទទួល' : '❌ ការទូទាត់ត្រូវបានបោះបង់'}</h1>
+<p>${isReturn ? 'សូមត្រឡប់ទៅកាន់ Telegram — កាបូបលុយរបស់អ្នកនឹងបញ្ចូលភ្លាមៗពេលប្រព័ន្ធផ្ទៀងផ្ទាត់ការទូទាត់ចប់។' : 'អ្នកអាចត្រឡប់ទៅ Telegram ដើម្បីសាកល្បងម្តងទៀត។'}</p>
+<p>You can close this tab and return to Telegram.</p>
+</div></body></html>`;
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end(html);
     }
 
     if (req.url && (req.url.includes('/payway') || req.url.includes('/callback') || req.url.includes('/webhook'))) {

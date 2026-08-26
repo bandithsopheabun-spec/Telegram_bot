@@ -1008,6 +1008,35 @@ let dynamicPackagePrices = {
     ]
 };
 
+// Generic Supabase-backed persistence for the JSON config files below.
+// Render's disk is ephemeral — every deploy rebuilds it fresh from git, so
+// anything written to packages_config.json/howto_config.json/media_config.json/
+// admins_config.json/resellers_config.json at runtime (a price edit, a new
+// admin, a new video link) was silently lost on the next redeploy, reverting
+// the bot to whatever was last committed. Reuses the same public.bot_settings
+// (key/value) table added for the Mode 1 QR photo fix. Fire-and-forget on
+// save (matches registerPendingAutoDeposit's existing style) so none of the
+// many save*Config() call sites throughout the file need to become async.
+async function rehydrateJsonConfig(key, filePath) {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('bot_settings').select('value').eq('key', key).maybeSingle();
+        if (error || !data || !data.value) return;
+        fs.writeFileSync(filePath, data.value, 'utf8');
+        console.log(`✅ Rehydrated ${key} from Supabase after restart`);
+    } catch (e) {
+        console.error(`⚠️ rehydrateJsonConfig(${key}) error:`, e.message);
+    }
+}
+
+function saveJsonConfigToSupabase(key, jsonString) {
+    if (!supabase) return;
+    supabase.from('bot_settings')
+        .upsert([{ key, value: jsonString, updated_at: new Date().toISOString() }], { onConflict: 'key' })
+        .then(() => {})
+        .catch(e => console.error(`⚠️ saveJsonConfigToSupabase(${key}) error:`, e.message));
+}
+
 const PACKAGES_FILE = path.join(__dirname, 'packages_config.json');
 
 function loadDynamicPackages() {
@@ -1032,6 +1061,7 @@ function saveDynamicPackages() {
     } catch (e) {
         console.error('⚠️ Could not save packages_config.json:', e.message);
     }
+    saveJsonConfigToSupabase('packages_config', JSON.stringify(dynamicPackagePrices));
 }
 
 const HOWTO_FILE = path.join(__dirname, 'howto_config.json');
@@ -1064,6 +1094,7 @@ function saveHowtoConfig() {
     } catch (e) {
         console.error('⚠️ Could not save howto_config.json:', e.message);
     }
+    saveJsonConfigToSupabase('howto_config', JSON.stringify(howtoVideoLinks));
 }
 
 const MEDIA_FILE = path.join(__dirname, 'media_config.json');
@@ -1090,6 +1121,7 @@ function saveMediaConfig(fileId) {
     } catch (e) {
         console.error('⚠️ Could not save media_config.json:', e.message);
     }
+    saveJsonConfigToSupabase('media_config', JSON.stringify({ videoId: fileId }));
 }
 
 // Extra admins added at runtime via the bot's "Manage Admins" menu (persisted
@@ -1119,6 +1151,7 @@ function saveAdminsConfig() {
     } catch (e) {
         console.error('⚠️ Could not save admins_config.json:', e.message);
     }
+    saveJsonConfigToSupabase('admins_config', JSON.stringify(extraAdminIds));
 }
 
 // Resellers added at runtime via the "Manage Resellers" menu — buy at a
@@ -1148,16 +1181,35 @@ function saveResellersConfig() {
     } catch (e) {
         console.error('⚠️ Could not save resellers_config.json:', e.message);
     }
+    saveJsonConfigToSupabase('resellers_config', JSON.stringify(resellerIdsList));
 }
 
-// Load dynamic package prices, howto links, start video media, extra admins, and resellers from disk on boot
-loadDynamicPackages();
-loadHowtoConfig();
-loadMediaConfig();
-loadAdminsConfig();
-loadResellersConfig();
+// resellerIds is derived from resellerIdsList once at boot — declared here
+// (not `const` until after bootLoadAllConfigs runs) so the Supabase
+// rehydration below can finish updating resellerIdsList first. isReseller()
+// and the add/remove reseller handlers all read/mutate this Set directly.
+let resellerIds = new Set();
 
-const resellerIds = new Set(resellerIdsList);
+// Load dynamic package prices, howto links, start video media, extra admins,
+// and resellers — restoring each from Supabase first (if configured) so a
+// redeploy doesn't revert them to whatever's committed in git (see
+// rehydrateJsonConfig above), then reading the now-current file from disk.
+async function bootLoadAllConfigs() {
+    if (supabase) {
+        await rehydrateJsonConfig('packages_config', PACKAGES_FILE);
+        await rehydrateJsonConfig('howto_config', HOWTO_FILE);
+        await rehydrateJsonConfig('media_config', MEDIA_FILE);
+        await rehydrateJsonConfig('admins_config', ADMINS_FILE);
+        await rehydrateJsonConfig('resellers_config', RESELLERS_FILE);
+    }
+    loadDynamicPackages();
+    loadHowtoConfig();
+    loadMediaConfig();
+    loadAdminsConfig();
+    loadResellersConfig();
+    resellerIds = new Set(resellerIdsList);
+}
+bootLoadAllConfigs().catch(e => console.error('⚠️ bootLoadAllConfigs error:', e.message));
 let resellerDiscountPercent = 20; // Default wholesale discount for resellers
 
 function isReseller(userId) {
@@ -4574,9 +4626,13 @@ bot.action(/^reject_dep_([^_]+)_([^_]+)$/, async (ctx) => {
         } catch (e) {}
     }
 
-    ctx.answerCbQuery('❌ បានបដិសេធការទូទាត់');
+    try { await ctx.answerCbQuery('❌ បានបដិសេធការទូទាត់'); } catch (e) {}
     const rejectedText = `❌ <b>បានបដិសេធការទូទាត់ #${depId}</b>`;
-    ctx.editMessageText(rejectedText, { parse_mode: 'HTML' });
+    // Unhandled otherwise: fails with "message is not modified" whenever the
+    // click comes from a message whose content already matches (observed in
+    // production logs) — an uncaught rejection Telegraf just logs as a
+    // crash-looking error, though it doesn't affect the actual decision.
+    try { await ctx.editMessageText(rejectedText, { parse_mode: 'HTML' }); } catch (e) {}
 
     // Sync the original notification card too — see approve_dep for why
     // reply_markup must be passed explicitly to actually clear its buttons.

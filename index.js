@@ -309,6 +309,72 @@ async function checkWingTransaction(orderRef) {
     }
 }
 
+// ============= KHQRPay (khqr.cc) — Mode 6, Auto-Payment via Webhook =============
+// A third-party KHQR gateway (not NBC's own Bakong Open API — a completely
+// separate service/credential, discovered after the token originally given
+// for "Bakong" turned out to belong to this service instead, per its own
+// docs at khqr.cc/docs). Much simpler than Wing: plain SHA1/SHA256 keyed
+// hashes, no encryption. Inactive until KHQR_CC_SECRET is set.
+let khqrCcSecret = process.env.KHQR_CC_SECRET || '';
+// The endpoint path includes a per-merchant profile id issued by khqr.cc —
+// not a generic base URL, so it's stored whole rather than composed.
+let khqrCcEndpoint = process.env.KHQR_CC_ENDPOINT || 'https://khqr.cc/api/lsvHfrmkxOGyo7yYsufYCVt68sHnmhKL/payment-gateway/v1/payments/qr-api';
+
+// Generates a KHQR payment via khqr.cc's Direct QR API. Returns
+// { qr, qr_url, md5 } on success (a raw EMVCo KHQR string we render
+// ourselves, same as Bakong/ACLEDA), or null on failure.
+async function generateKhqrCcPayment(amount, transactionId) {
+    if (!khqrCcSecret) return null;
+    const baseUrl = (process.env.WEB_APP_URL || '').replace(/\/$/, '');
+    // success_url doubles as the callback target when no Global Webhook URL
+    // is configured in the khqr.cc dashboard — set one there pointing at
+    // POST /khqrcc-webhook for reliable delivery regardless of this value.
+    const successUrl = `${baseUrl}/khqrcc-return`;
+    const remark = `${BRAND_NAME} Deposit`;
+    const amountStr = parseFloat(amount).toFixed(2);
+    const cleanTxnId = transactionId.replace(/[^a-zA-Z0-9_]/g, '');
+
+    const hash = require('crypto').createHash('sha1')
+        .update(khqrCcSecret + cleanTxnId + amountStr + successUrl + remark)
+        .digest('hex');
+
+    try {
+        const body = new URLSearchParams({
+            transaction_id: cleanTxnId,
+            amount: amountStr,
+            success_url: successUrl,
+            remark,
+            hash
+        });
+        const res = await fetch(khqrCcEndpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body.toString()
+        });
+        const data = await res.json();
+        if (data.responseCode === 0 && data.data && data.data.qr) {
+            return data.data;
+        }
+        console.error('⚠️ khqr.cc generate failed:', JSON.stringify(data));
+        return null;
+    } catch (e) {
+        console.error('⚠️ khqr.cc generate error:', e.message);
+        return null;
+    }
+}
+
+// Verifies a khqr.cc webhook callback's signature: sha256(secret + req_time
+// + transaction_id + amount + status). Must pass before ever crediting a
+// balance off this callback — an unauthenticated POST to our webhook URL
+// could otherwise fabricate a fake "payment succeeded" for any amount.
+function verifyKhqrCcWebhookHash(reqTime, transactionId, amount, status, receivedHash) {
+    if (!khqrCcSecret || !receivedHash) return false;
+    const expected = require('crypto').createHash('sha256')
+        .update(`${khqrCcSecret}${reqTime}${transactionId}${amount}${status}`)
+        .digest('hex');
+    return expected === receivedHash;
+}
+
 // Dynamic EMVCo KHQR Generator Helper with CRC16 Checksum for Bakong & ACLEDA
 function crc16(str) {
     let crc = 0xFFFF;
@@ -694,6 +760,12 @@ function startAutoPaymentEngine() {
             // place (the webhook handler still needs to find it) but skip
             // the check.
             if (item.mode === 'PAYWAY') continue;
+
+            // khqr.cc (Mode 6) settles exclusively via its own webhook (POST
+            // /khqrcc-webhook) — no pull/inquiry endpoint is wired up yet, so
+            // there's nothing useful this loop can check; same reasoning as
+            // PayWay above.
+            if (item.mode === 'KHQRCC') continue;
 
             // Wing has its own "Unlimited" rate tier (unlike Bakong's
             // 100/day) and its own webhook (POST /wing-webhook, the primary
@@ -2610,6 +2682,58 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(wingMsg, wingKb);
         }
 
+        if (depositMode === 'KHQRCC') {
+            const isKm = lang === 'km';
+
+            if (!khqrCcSecret) {
+                delete userState[userId];
+                return ctx.replyWithHTML(
+                    isKm
+                        ? `⚠️ <b>khqr.cc Payment មិនទាន់ត្រូវបានកំណត់ (Not Configured) ទេ — សូមទាក់ទង Admin!</b>`
+                        : `⚠️ <b>khqr.cc Payment is not configured yet — please contact Admin!</b>`
+                );
+            }
+
+            const khqrCcResult = await generateKhqrCcPayment(amount, depositId);
+            if (!khqrCcResult) {
+                delete userState[userId];
+                return ctx.replyWithHTML(
+                    isKm
+                        ? `⚠️ <b>មិនអាចបង្កើត QR បានទេ — សូមសាកល្បងម្តងទៀត ឬទាក់ទង Admin!</b>`
+                        : `⚠️ <b>Could not generate a QR — please try again or contact Admin!</b>`
+                );
+            }
+
+            // khqr.cc's own md5 (from its response) is what its webhook will
+            // reference back — not the same value as Bakong's own MD5
+            // scheme, but registerPendingAutoDeposit just needs a stable key.
+            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, khqrCcResult.md5 || depositId, 'KHQRCC');
+            const khqrQrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(khqrCcResult.qr)}`;
+
+            const khqrCcMsg = isKm ?
+                `💮 <b>ទូទាត់តាម KHQR ( Auto Payment )</b>\n----------------------------------------\n\n` +
+                `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
+                (bonusAmount > 0 ? `🎁 <b>Bonus ថែមជូន (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+                `🆔 <b>លេខ Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `⚡ <i>ប្រព័ន្ធនឹងទម្លាក់លុយចូលកាបូបលុយរបស់អ្នកស្វ័យប្រវត្តិ ១០០% ភ្លាមៗបន្ទាប់ពីទូទាត់ជោគជ័យ!</i>` :
+                `💮 <b>KHQR Payment ( Auto Payment )</b>\n----------------------------------------\n\n` +
+                `💳 <b>Deposit Amount: $${amount.toFixed(2)} USD</b>\n` +
+                (bonusAmount > 0 ? `🎁 <b>Bonus (${bonusPercent}%): +$${bonusAmount.toFixed(2)} USD</b>\n` : '') +
+                `🆔 <b>Deposit ID:</b> <code>#${depositId}</code>\n\n` +
+                `⚡ <i>Your wallet will be credited automatically the instant payment succeeds!</i>`;
+
+            const khqrCcKb = Markup.inlineKeyboard([
+                [Markup.button.callback(isKm ? '❌ បោះបង់ការទូទាត់' : '❌ Cancel Payment', `cancel_dep_${depositId}`)]
+            ]);
+
+            try {
+                await ctx.replyWithPhoto({ url: khqrQrImageUrl }, { caption: khqrCcMsg, parse_mode: 'HTML', ...khqrCcKb });
+            } catch (qrErr) {
+                await ctx.replyWithHTML(khqrCcMsg, khqrCcKb);
+            }
+            return;
+        }
+
         if (depositMode === 'AUTO') {
             const acledaAutoMsg = 
                 `🏦 <b>ACLEDA Bank Auto-Payment ( ACLEDA API Verified ⚡ )</b>\n` +
@@ -2801,6 +2925,18 @@ bot.on('text', async (ctx, next) => {
             `✅ <b>បានរក្សាទុក Wing Client ID + Secret ដោយជោគជ័យ!</b>\n\n` +
             `⚠️ <i>Credentials នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variables ` +
             `<code>WING_CLIENT_ID</code> និង <code>WING_CLIENT_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>`,
+            getAdminSettingsKeyboard()
+        );
+    }
+
+    if (state.step === 'AWAITING_ADMIN_KHQRCC_SECRET') {
+        khqrCcSecret = text.trim();
+        delete userState[userId];
+        return ctx.replyWithHTML(
+            `✅ <b>បានរក្សាទុក khqr.cc Secret Key ដោយជោគជ័យ!</b>\n\n` +
+            `⚠️ <i>Secret Key នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variable ` +
+            `<code>KHQR_CC_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>\n\n` +
+            `📌 <i>កុំភ្លេចកំណត់ Global Webhook URL ក្នុង khqr.cc Dashboard ទៅជា <code>${(process.env.WEB_APP_URL || 'https://your-domain.com')}/khqrcc-webhook</code> ផងដែរ!</i>`,
             getAdminSettingsKeyboard()
         );
     }
@@ -3446,6 +3582,7 @@ function getAdminSettingsKeyboard() {
     if (depositMode === 'PAYWAY') modeBtn = `💳 Mode: 🏦 3. ABA PayWay ( Auto Payments )`;
     if (depositMode === 'BAKONG') modeBtn = `💳 Mode: 🇰🇭 4. Bakong KHQR ( Auto Payments )`;
     if (depositMode === 'WING') modeBtn = `💳 Mode: 🟠 5. Wing KHQR ( Unlimited Auto Payments )`;
+    if (depositMode === 'KHQRCC') modeBtn = `💳 Mode: 💠 6. khqr.cc ( Webhook Auto Payments )`;
 
     return Markup.keyboard([
         [modeBtn],
@@ -3453,6 +3590,7 @@ function getAdminSettingsKeyboard() {
         [isAcledaPaymentOn ? '🏦 ACLEDA Auto-Pay: ✅ ON' : '🏦 ACLEDA Auto-Pay: ❌ OFF', '🔑 · Edit ACLEDA Token'],
         [isBakongPaymentOn ? '🏦 Bakong Payment: ✅ ON' : '🏦 Bakong Payment: ❌ OFF', '🇰🇭 · Edit Bakong ID'],
         [`🟠 Wing: ${wingClientId ? '✅ Configured' : '❌ Not Set'}`, '🔑 · Edit Wing Credentials'],
+        [`💠 khqr.cc: ${khqrCcSecret ? '✅ Configured' : '❌ Not Set'}`, '🔑 · Edit khqr.cc Secret'],
         ['🔐 Admin Menu']
     ]).resize();
 }
@@ -3780,8 +3918,8 @@ bot.hears(['📊 · Bot metrics', 'Bot metrics'], async (ctx) => {
     ctx.replyWithHTML(metricsMsg, adminAnalyticsKeyboard);
 });
 
-// 💳 DEPOSIT MODE CYCLE TOGGLE ( 1. តម្រូវអនុម័ត -> 2. ACLEDA API -> 3. ABA PayWay -> 4. Bakong KHQR -> 5. Wing KHQR -> 1. តម្រូវអនុម័ត )
-bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័ត/i, /2. Auto Payments/i, /3. ABA PayWay/i, /4. Bakong KHQR/i, /5. Wing KHQR/i], (ctx) => {
+// 💳 DEPOSIT MODE CYCLE TOGGLE ( 1. តម្រូវអនុម័ត -> 2. ACLEDA API -> 3. ABA PayWay -> 4. Bakong KHQR -> 5. Wing KHQR -> 6. khqr.cc -> 1. តម្រូវអនុម័ត )
+bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័ត/i, /2. Auto Payments/i, /3. ABA PayWay/i, /4. Bakong KHQR/i, /5. Wing KHQR/i, /6. khqr\.cc/i], (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
 
@@ -3797,6 +3935,9 @@ bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័
     } else if (depositMode === 'BAKONG') {
         depositMode = 'WING';
         isInstantAutoDepositOn = true;
+    } else if (depositMode === 'WING') {
+        depositMode = 'KHQRCC';
+        isInstantAutoDepositOn = true;
     } else {
         depositMode = 'MANUAL';
         isInstantAutoDepositOn = false;
@@ -3807,10 +3948,14 @@ bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័
     if (depositMode === 'PAYWAY') modeTitle = '🏦 3. ABA PayWay Merchant ( Direct PayWay Link Auto-Payment )';
     if (depositMode === 'BAKONG') modeTitle = '🇰🇭 4. Bakong KHQR ( National Bank Bakong Open API Auto Payment )';
     if (depositMode === 'WING') modeTitle = '🟠 5. Wing KHQR ( Unlimited Rate Tier, Webhook Auto Payment )';
+    if (depositMode === 'KHQRCC') modeTitle = '💠 6. khqr.cc ( Third-Party Gateway, Webhook Auto Payment )';
 
     let extraNote = '';
     if (depositMode === 'WING' && !wingClientId) {
         extraNote = `\n\n⚠️ <i>Wing Client ID/Secret មិនទាន់កំណត់ទេ — សូមចុច "🔑 · Edit Wing Credentials" ជាមុនសិន បើមិនដូច្នេះទេ អតិថិជននឹងទទួលបានសារ Error ពេលព្យាយាមទូទាត់!</i>`;
+    }
+    if (depositMode === 'KHQRCC' && !khqrCcSecret) {
+        extraNote = `\n\n⚠️ <i>khqr.cc Secret Key មិនទាន់កំណត់ទេ — សូមចុច "🔑 · Edit khqr.cc Secret" ជាមុនសិន បើមិនដូច្នេះទេ អតិថិជននឹងទទួលបានសារ Error ពេលព្យាយាមទូទាត់! ក៏សូមកុំភ្លេចកំណត់ Global Webhook URL ក្នុង khqr.cc Dashboard ទៅជា ${(process.env.WEB_APP_URL || 'https://your-domain.com')}/khqrcc-webhook ផងដែរ។</i>`;
     }
 
     ctx.replyWithHTML(`✅ <b>កែប្រែរបៀបទូទាត់ប្រាក់ទៅជា ៖ ${modeTitle}</b>${extraNote}`, getAdminSettingsKeyboard());
@@ -3896,6 +4041,21 @@ bot.hears(['🔑 · Edit Wing Credentials', 'Edit Wing Credentials'], (ctx) => {
         `🟠 <b>កែប្រែ Wing Bank API Credentials ៖</b>\n\n` +
         `📋 Client ID បច្ចុប្បន្ន ៖ <code>${maskedId}</code>\n\n` +
         `✍️ <b>ជំហានទី ១៖</b> សូមផ្ញើ <b>Wing Client ID</b> ថ្មី ( ទទួលបានពី openapi.wingbank.com.kh ) ៖`;
+
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 💠 EDIT KHQR.CC SECRET KEY
+bot.hears(['🔑 · Edit khqr.cc Secret', 'Edit khqr.cc Secret'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_KHQRCC_SECRET' };
+    const masked = khqrCcSecret ? `${khqrCcSecret.slice(0, 6)}...${khqrCcSecret.slice(-4)}` : 'Not Set';
+    const prompt =
+        `💠 <b>កែប្រែ khqr.cc Secret Key ៖</b>\n\n` +
+        `📋 Secret Key បច្ចុប្បន្ន ៖ <code>${masked}</code>\n\n` +
+        `✍️ សូមផ្ញើ <b>khqr.cc Secret Key</b> ថ្មី ( ទទួលបានពី khqr.cc Dashboard → API Keys ) ៖`;
 
     ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
 });
@@ -5184,7 +5344,7 @@ http.createServer(async (req, res) => {
             // "💳 I Have Paid" button in the bot chat. Registering these into
             // pendingAutoDeposits would just burn Bakong's scarce daily quota
             // checking transactions a human is going to settle anyway.
-            const isAutoMode = depositMode === 'BAKONG' || depositMode === 'AUTO';
+            const isAutoMode = depositMode === 'BAKONG' || depositMode === 'AUTO' || depositMode === 'KHQRCC';
 
             // Only record a Pending row now for the auto modes, where the
             // background poller needs it and payment can arrive with no
@@ -5215,6 +5375,9 @@ http.createServer(async (req, res) => {
                 }
             } else if (depositMode === 'AUTO') {
                 dynamicQrData = generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME_UPPER, amount, depositId);
+            } else if (depositMode === 'KHQRCC') {
+                const khqrCcResult = await generateKhqrCcPayment(amount, depositId);
+                dynamicQrData = khqrCcResult ? khqrCcResult.qr : generateDynamicKhqr(acledaMerchantId || 'lasa_leng@aclb', BRAND_NAME, amount, depositId);
             } else {
                 // MANUAL (Mode 1) / PAYWAY (Mode 3) — same default QR source
                 // as the bot's own Mode 1 flow.
@@ -5377,8 +5540,8 @@ http.createServer(async (req, res) => {
     // finishes (or cancels) Wing's hosted KHQR checkout page. The webhook
     // above is what actually credits the balance; these are just friendly
     // "you can close this tab / go back to Telegram" pages.
-    if (req.url && (req.url.startsWith('/wing-return') || req.url.startsWith('/wing-cancel'))) {
-        const isReturn = req.url.startsWith('/wing-return');
+    if (req.url && (req.url.startsWith('/wing-return') || req.url.startsWith('/wing-cancel') || req.url.startsWith('/khqrcc-return'))) {
+        const isReturn = !req.url.startsWith('/wing-cancel');
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${BRAND_NAME}</title>
 <style>body{font-family:sans-serif;background:#0f1115;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;text-align:center;padding:20px}
 .card{max-width:420px}h1{font-size:1.4rem}p{color:#aaa}</style></head>
@@ -5389,6 +5552,48 @@ http.createServer(async (req, res) => {
 </div></body></html>`;
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(html);
+    }
+
+    // khqr.cc webhook — the primary, push-based path for Mode 6 (KHQRCC).
+    // Configured as the "Global Webhook Endpoint" in khqr.cc's dashboard
+    // settings (takes priority over the per-request success_url per their
+    // docs). Every callback's hash MUST be verified before crediting
+    // anything — an unauthenticated POST here could otherwise fabricate a
+    // fake "payment succeeded" for any amount.
+    if (req.url && req.url.startsWith('/khqrcc-webhook') && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', async () => {
+            console.log('🔔 Received khqr.cc Webhook POST:', body);
+            try {
+                let data = {};
+                try { data = JSON.parse(body); } catch (e) {}
+                const depId = data.transaction_id;
+                const item = depId && pendingAutoDeposits[depId];
+
+                const hashOk = verifyKhqrCcWebhookHash(data.req_time, data.transaction_id, data.amount, data.status, data.hash);
+                if (!hashOk) {
+                    console.error('⚠️ khqr.cc webhook hash mismatch — rejecting (possible spoofed request):', depId);
+                } else if (item && data.status === 'SUCCESS') {
+                    // Per khqr.cc's own docs: only accept an amount >= what
+                    // was actually expected for this deposit.
+                    const paidAmount = parseFloat(data.amount || 0);
+                    if (paidAmount >= item.amount - 0.001) {
+                        await autoCreditDeposit(depId, item);
+                    } else {
+                        console.error(`⚠️ khqr.cc webhook amount mismatch for ${depId}: expected $${item.amount}, got $${paidAmount}`);
+                    }
+                }
+            } catch (err) {
+                console.error('⚠️ khqr.cc webhook process error:', err.message);
+            }
+            // Always return 200, even for duplicates/already-processed —
+            // khqr.cc retries on any non-200 response, which their docs warn
+            // can cause duplicate delivery.
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ received: true }));
+        });
+        return;
     }
 
     if (req.url && (req.url.includes('/payway') || req.url.includes('/callback') || req.url.includes('/webhook'))) {

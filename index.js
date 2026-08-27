@@ -1408,8 +1408,9 @@ async function sendWelcomeMessage(ctx) {
     const websiteUrl = process.env.WEB_APP_URL || 'https://telegram-bot-djpl.onrender.com';
 
     const welcomeButtons = Markup.inlineKeyboard([
-        [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Telegram Channel ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Official Telegram Channel 🎁 ↗️', activeChannelLink)],
-        [Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)]
+        [Markup.button.url(lang === 'km' ? '📖 របៀបប្រើប្រាស់ (How to Use) ↗️' : '📖 How to Use ↗️', activeChannelLink)],
+        [Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)],
+        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( ២៤ម៉ោង ⚡ ) ↗️' : '💬 Contact Admin Support 24/7 ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
     ]);
 
     const videoId = customHowToOrderVideoId || process.env.HOW_TO_ORDER_VIDEO_ID;

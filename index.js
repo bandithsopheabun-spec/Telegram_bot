@@ -318,7 +318,13 @@ async function checkWingTransaction(orderRef) {
 let khqrCcSecret = process.env.KHQR_CC_SECRET || '';
 // The endpoint path includes a per-merchant profile id issued by khqr.cc —
 // not a generic base URL, so it's stored whole rather than composed.
-let khqrCcEndpoint = process.env.KHQR_CC_ENDPOINT || 'https://khqr.cc/api/lsvHfrmkxOGyo7yYsufYCVt68sHnmhKL/payment-gateway/v1/payments/qr-api';
+// The 'qr-api-khqrcc' variant (not the plain 'qr-api' — that one needs the
+// merchant's own separate NBC Bakong OpenAPI token configured on khqr.cc's
+// side, which produced "Bakong Token Required" for this account) routes
+// verification through the merchant's linked ABA Pay link + Bakong MD5
+// check on khqr.cc's own infrastructure instead — no separate Bakong token
+// needed on our end. Same request/response contract either way.
+let khqrCcEndpoint = process.env.KHQR_CC_ENDPOINT || 'https://khqr.cc/api/lsvHfrmkxOGyo7yYsufYCVt68sHnmhKL/payment-gateway/v1/payments/qr-api-khqrcc';
 
 // Generates a KHQR payment via khqr.cc's Direct QR API. Returns
 // { qr, qr_url, md5 } on success (a raw EMVCo KHQR string we render

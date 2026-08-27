@@ -2556,13 +2556,16 @@ bot.on('text', async (ctx, next) => {
         delete userState[userId];
 
         // Record Deposit in Supabase DB — only for the hands-off auto modes
-        // (BAKONG/ACLEDA), where the background poller/webhook needs the row
-        // to exist and payment can arrive without the customer clicking
-        // anything. Manual/PayWay only record it once the customer actually
-        // taps "I Have Paid" (see confirm_dep below) — merely opening the
-        // deposit tab and getting a QR shouldn't create a Pending record
-        // that then has to be manually cleared if they never pay.
-        if (supabase && (depositMode === 'BAKONG' || depositMode === 'AUTO')) {
+        // (BAKONG/ACLEDA/WING/KHQRCC), where the background poller or
+        // webhook needs the row to exist and payment can arrive without the
+        // customer clicking anything. Manual/PayWay only record it once the
+        // customer actually taps "I Have Paid" (see confirm_dep below) —
+        // merely opening the deposit tab and getting a QR shouldn't create a
+        // Pending record that then has to be manually cleared if they never
+        // pay. (This list must stay in sync with isAutoMode-equivalent
+        // checks elsewhere — it silently missed WING/KHQRCC when those
+        // modes were added, leaving their deposits completely unrecorded.)
+        if (supabase && (depositMode === 'BAKONG' || depositMode === 'AUTO' || depositMode === 'WING' || depositMode === 'KHQRCC')) {
             try {
                 await supabase.from('deposits').insert([{
                     deposit_id: depositId,

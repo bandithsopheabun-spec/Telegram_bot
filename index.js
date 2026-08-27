@@ -1410,7 +1410,7 @@ async function sendWelcomeMessage(ctx) {
     const welcomeButtons = Markup.inlineKeyboard([
         [Markup.button.url(lang === 'km' ? '📖 របៀបប្រើប្រាស់ (How to Use) ↗️' : '📖 How to Use ↗️', activeChannelLink)],
         [Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)],
-        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( ២៤ម៉ោង ⚡ ) ↗️' : '💬 Contact Admin Support 24/7 ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
+        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( 7ព្រឹក-10យប់ ⚡ ) ↗️' : '💬 Contact Admin Support (7AM-10PM) ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
     ]);
 
     const videoId = customHowToOrderVideoId || process.env.HOW_TO_ORDER_VIDEO_ID;
@@ -1550,16 +1550,16 @@ bot.hears(['💬 Support & Admin', 'Support & Admin', '💬 ជំនួយ Supp
         `លោកអ្នកមានចម្ងល់ ឬ ត្រូវការជំនួយក្នុងការបញ្ជាទិញ? 💡\n\n` +
         `📢 <b>Telegram Channel ផ្លូវការ ៖</b> <a href="${activeChannelLink}">${activeChannelLink}</a>\n` +
         `👤 <b>Admin Support ៖</b> ${SUPPORT_LINK}\n\n` +
-        `⚡ <i>ក្រុមការងារយើងខ្ញុំរង់ចាំជួយសម្រួល ២៤ម៉ោង / ៧ថ្ងៃ!</i>` :
+        `⚡ <i>ក្រុមការងារយើងខ្ញុំរង់ចាំជួយសម្រួលរៀងរាល់ថ្ងៃ ម៉ោង 7ព្រឹក - 10យប់!</i>` :
         `💬 <b>SUPPORT ADMIN</b> 💬\n\n` +
         `Have questions or need assistance with your order? 💡\n\n` +
         `📢 <b>Official Telegram Channel:</b> <a href="${activeChannelLink}">${activeChannelLink}</a>\n` +
         `👤 <b>Admin Support:</b> ${SUPPORT_LINK}\n\n` +
-        `⚡ <i>We are here to assist you 24/7!</i>`;
+        `⚡ <i>We are here to assist you every day, 7AM-10PM!</i>`;
 
     const channelInlineKb = Markup.inlineKeyboard([
         [Markup.button.url(lang === 'km' ? '📢 ចូលរួម Telegram Channel ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️' : '📢 Join Official Telegram Channel 🎁 ↗️', activeChannelLink)],
-        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( ២៤ម៉ោង ⚡ ) ↗️' : '💬 Contact Admin Support 24/7 ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
+        [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( 7ព្រឹក-10យប់ ⚡ ) ↗️' : '💬 Contact Admin Support (7AM-10PM) ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
     ]);
 
     ctx.replyWithHTML(supportMsg, { disable_web_page_preview: true, ...channelInlineKb, ...getMainKeyboard(lang) });
@@ -1652,7 +1652,7 @@ async function sendMyOrdersHistory(ctx) {
         const orderHistoryKb = Markup.inlineKeyboard([
             [
                 Markup.button.callback(lang === 'km' ? '🛒 ទិញកញ្ចប់បន្ថែម (Buy More)' : '🛒 Buy More Packages', 'history_buy_more'),
-                Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Order Support 24/7', 'https://t.me/Blessing_Kh_Supports')
+                Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (7ព្រឹក-10យប់)' : '💬 Order Support (7AM-10PM)', 'https://t.me/Blessing_Kh_Supports')
             ],
             [
                 Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
@@ -2370,7 +2370,7 @@ bot.on('text', async (ctx, next) => {
                 const orderKb = Markup.inlineKeyboard([
                     [
                         Markup.button.callback(lang === 'km' ? '🛒 ទិញកញ្ចប់បន្ថែម (Buy Packages)' : '🛒 Buy Packages', 'history_buy_more'),
-                        Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Order Support 24/7', 'https://t.me/Blessing_Kh_Supports')
+                        Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (7ព្រឹក-10យប់)' : '💬 Order Support (7AM-10PM)', 'https://t.me/Blessing_Kh_Supports')
                     ],
                     [
                         Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
@@ -2391,7 +2391,7 @@ bot.on('text', async (ctx, next) => {
                 const notFoundKb = Markup.inlineKeyboard([
                     [
                         Markup.button.callback(lang === 'km' ? '📅 មើលប្រវត្តិទិញ (My Orders)' : '📅 View Order History', 'profile_my_orders'),
-                        Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (24/7)' : '💬 Admin Support', 'https://t.me/Blessing_Kh_Supports')
+                        Markup.button.url(lang === 'km' ? '💬 ជំនួយ Admin (7ព្រឹក-10យប់)' : '💬 Admin Support (7AM-10PM)', 'https://t.me/Blessing_Kh_Supports')
                     ]
                 ]);
 

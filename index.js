@@ -3524,25 +3524,41 @@ bot.hears(['📋 All Users', 'All Users'], async (ctx) => {
             telegram_id: id,
             balance: userBalances[id] || 0
         }));
+    let totalUserCount = usersList.length;
 
     if (supabase) {
         try {
-            const { data } = await supabase.from('users').select('*').limit(20);
-            if (data && data.length > 0) {
+            // No .limit() here — the previous limit(20) silently dropped
+            // every user beyond the first 20 the query happened to return
+            // (no explicit order, so effectively arbitrary) from BOTH the
+            // list and the total, understating real customer balances the
+            // moment the table grew past 20 rows.
+            const { data, count } = await supabase.from('users').select('telegram_id, balance', { count: 'exact' });
+            if (data) {
                 usersList = data.filter(u => u && u.telegram_id && u.telegram_id !== 'NaN' && !isNaN(parseInt(u.telegram_id)));
+                totalUserCount = count != null ? count : usersList.length;
             }
         } catch (e) {}
     }
 
-    let totalBal = usersList.reduce((acc, u) => acc + parseFloat(u.balance || 0), 0);
+    const totalBal = usersList.reduce((acc, u) => acc + parseFloat(u.balance || 0), 0);
 
-    const listText = 
+    // Highest-balance customers first — the most actionable view for an
+    // admin — capped at 15 rows so the message stays readable; the totals
+    // below always cover every user, not just these 15.
+    const topByBalance = [...usersList]
+        .sort((a, b) => parseFloat(b.balance || 0) - parseFloat(a.balance || 0))
+        .slice(0, 15);
+
+    const listText =
         `📋 <b>${BRAND_NAME_UPPER} — ALL USERS LIST</b>\n` +
         `----------------------------------------\n\n` +
-        usersList.slice(0, 15).map(u => 
+        topByBalance.map(u =>
             `🆔 <b>ID:</b> <code>${u.telegram_id}</code> | 💰 <b>$${parseFloat(u.balance || 0).toFixed(2)} USD</b>`
         ).join('\n') +
+        (totalUserCount > topByBalance.length ? `\n<i>… និង ${totalUserCount - topByBalance.length} User ផ្សេងទៀត (Balance ទាបជាង)</i>` : '') +
         `\n----------------------------------------\n` +
+        `👥 <b>អ្នកប្រើប្រាស់សរុប ៖</b> ${totalUserCount} Users\n` +
         `💰 <b>ប្រាក់សរុបក្នុងប្រព័ន្ធ ៖ $${totalBal.toFixed(2)} USD</b> 💵`;
 
     ctx.replyWithHTML(listText, adminUsersKeyboard);

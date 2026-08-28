@@ -4059,12 +4059,12 @@ bot.hears(['📊 · Bot metrics', 'Bot metrics'], async (ctx) => {
         } catch (e) {}
     }
 
-    const metricsMsg = 
+    const metricsMsg =
         `📊 <b>Bot Metrics & System Health</b>\n----------------------------------------\n\n` +
         `👥 <b>Total Registered Users:</b> ${usersCount}\n` +
         `📦 <b>Total Orders Processed:</b> ${ordersCount}\n` +
         `💳 <b>Total Deposit Requests:</b> ${depositsCount}\n` +
-        `🗄️ <b>Database Status:</b> <b>Connected 🟢</b>\n` +
+        `🗄️ <b>Database Status:</b> ${supabase ? '<b>Connected 🟢</b>' : '<b>Not Connected ⚪ (in-memory fallback)</b>'}\n` +
         `⚡ <b>System Uptime Status:</b> 🟢 <b>Online 24/7</b>`;
 
     ctx.replyWithHTML(metricsMsg, adminAnalyticsKeyboard);

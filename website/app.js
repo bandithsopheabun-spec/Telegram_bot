@@ -70,6 +70,7 @@ const I18N = {
         toast_no_link: '⚠️ សូមបញ្ចូល Link target របស់អ្នកជាមុនសិន!',
         toast_insufficient_balance: '⚠️ តុល្យភាពមិនគ្រប់គ្រាន់ឡើយ! សូមបញ្ចូលលុយជាមុនសិន',
         toast_order_failed: '⚠️ បញ្ជាទិញមិនជោគជ័យ — សូមសាកល្បងម្តងទៀត',
+        toast_maintenance: '🚧 ប្រព័ន្ធកំពុងថែទាំបណ្តោះអាសន្ន — សូមសាកល្បងម្តងទៀតពេលក្រោយ',
         toast_order_success: '🎉 បញ្ជាទិញជោគជ័យ!',
         toast_network_error: '⚠️ បញ្ហាបណ្តាញ — សូមសាកល្បងម្តងទៀត',
         toast_qr_failed: '⚠️ មិនអាចបង្កើត QR បានទេ — សូមសាកល្បងម្តងទៀត',
@@ -130,6 +131,7 @@ const I18N = {
         toast_no_link: '⚠️ Please enter the target link first!',
         toast_insufficient_balance: '⚠️ Insufficient balance! Please deposit first.',
         toast_order_failed: '⚠️ Order failed — please try again.',
+        toast_maintenance: '🚧 System is under temporary maintenance — please try again later',
         toast_order_success: '🎉 Order placed successfully!',
         toast_network_error: '⚠️ Network error — please try again.',
         toast_qr_failed: '⚠️ Could not generate QR — please try again.',
@@ -517,6 +519,8 @@ function initOrderForm() {
             if (!res.ok) {
                 if (data.error === 'insufficient_balance') {
                     showToast(t('toast_insufficient_balance'), 'error');
+                } else if (data.error === 'maintenance_mode') {
+                    showToast(t('toast_maintenance'), 'error');
                 } else {
                     showToast(t('toast_order_failed'), 'error');
                 }
@@ -573,7 +577,8 @@ async function generateRealDeposit(amount) {
             body: JSON.stringify({ amount })
         });
         if (!res.ok) {
-            showToast(t('toast_qr_failed'), 'error');
+            const errData = await res.json().catch(() => ({}));
+            showToast(errData.error === 'maintenance_mode' ? t('toast_maintenance') : t('toast_qr_failed'), 'error');
             return;
         }
         const dep = await res.json();

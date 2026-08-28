@@ -5478,6 +5478,12 @@ http.createServer(async (req, res) => {
         }
 
         if (apiPath === '/api/orders' && req.method === 'POST') {
+            // Mirrors the bot chat's maintenance-mode check (bot.on('text'))
+            // — without this, "🔴 Bot: maintenance" only stopped the Telegram
+            // chat flow while the website kept accepting orders normally.
+            if (!isBotOpen && !isAdmin(sessionUserId)) {
+                return sendJson(res, 503, { error: 'maintenance_mode' });
+            }
             const body = await readJsonBody(req);
             const { packageName, price, targetLink } = body;
             if (!packageName || !price || !targetLink) {
@@ -5494,6 +5500,9 @@ http.createServer(async (req, res) => {
         }
 
         if (apiPath === '/api/deposits' && req.method === 'POST') {
+            if (!isBotOpen && !isAdmin(sessionUserId)) {
+                return sendJson(res, 503, { error: 'maintenance_mode' });
+            }
             const body = await readJsonBody(req);
             const amount = parseFloat(body.amount);
             if (isNaN(amount) || amount <= 0) {

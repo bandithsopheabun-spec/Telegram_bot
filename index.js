@@ -2256,33 +2256,6 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(`✅ <b>បានកែប្រែប្រាក់ Deposit ទាបបំផុតសម្រាប់ទទួលបាន Bonus ទៅជា $${bonusMinDeposit.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
         }
 
-        if (state.step === 'AWAITING_ADMIN_BROADCAST') {
-            delete userState[userId];
-            const broadcastText = text;
-
-            let targetUsers = Object.keys(userBalances).map(id => parseInt(id));
-            if (supabase) {
-                try {
-                    const { data } = await supabase.from('users').select('telegram_id');
-                    if (data && data.length > 0) targetUsers = data.map(u => u.telegram_id);
-                } catch (e) {}
-            }
-
-            let successCount = 0, failCount = 0;
-            await ctx.replyWithHTML(`⏳ Broadcast sending to <b>${targetUsers.length}</b> users...`);
-
-            for (const tId of targetUsers) {
-                try {
-                    await bot.telegram.sendMessage(tId, broadcastText, { parse_mode: 'HTML' });
-                    successCount++;
-                } catch (e) {
-                    failCount++;
-                }
-            }
-
-            return ctx.replyWithHTML(`✅ <b>Broadcast Complete!</b>\n\n🟢 Success: <b>${successCount}</b>\n🔴 Failed: <b>${failCount}</b>`, adminToolsKeyboard);
-        }
-
         if (state.step === 'AWAITING_ADMIN_EDIT_PRICE_INPUT') {
             const catId = state.catId || 'likes';
             let targetPkgName = '';

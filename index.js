@@ -2052,6 +2052,42 @@ bot.on('text', async (ctx, next) => {
             );
         }
 
+        // Must live here too (same reasoning as the IDS step above, right
+        // next to it) — this was originally ~1000 lines further down in the
+        // generic text handler, so the admin's actual broadcast content
+        // could get silently intercepted by unrelated logic in between
+        // before ever reaching it. Confirmed live: the content message never
+        // produced a preview, and the *next* message sent (an "Admin Menu"
+        // button tap) was the one that finally got treated as the broadcast
+        // content instead.
+        if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT') {
+            delete userState[userId];
+            const msgId = ctx.message.message_id;
+            const fromChatId = ctx.chat.id;
+            pendingTargetedBroadcasts[msgId] = state.targetIds;
+
+            const previewPrompt =
+                `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Targeted Broadcast Preview) ៖</b>\n` +
+                `----------------------------------------\n` +
+                `🎯 <b>ចំនួន User ដែលនឹងទទួល ៖</b> <b>${state.targetIds.length}</b>\n` +
+                `<code>${state.targetIds.join(', ')}</code>\n\n` +
+                `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើ ]</b> ខាងក្រោម ៖</i>`;
+
+            const targetedBcastKb = Markup.inlineKeyboard([
+                [Markup.button.callback('🚀 ផ្ញើទៅកាន់ User ដែលបានជ្រើសរើស', `send_targeted_bcast_${msgId}`)],
+                [Markup.button.callback('❌ បោះបង់ (Cancel)', `cancel_targeted_bcast_${msgId}`)]
+            ]);
+
+            await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+
+            try {
+                await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: targetedBcastKb.reply_markup });
+            } catch (e) {
+                await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
+            }
+            return;
+        }
+
         if (state.step === 'AWAITING_ADMIN_CREDIT_ID') {
             const targetId = parseInt(text.replace(/[^0-9]/g, ''));
             userState[userId] = { step: 'AWAITING_ADMIN_CREDIT_AMOUNT', targetId: targetId };
@@ -2980,33 +3016,6 @@ bot.on('text', async (ctx, next) => {
         return;
     }
 
-    if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT') {
-        delete userState[userId];
-        const msgId = ctx.message.message_id;
-        const fromChatId = ctx.chat.id;
-        pendingTargetedBroadcasts[msgId] = state.targetIds;
-
-        const previewPrompt =
-            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Targeted Broadcast Preview) ៖</b>\n` +
-            `----------------------------------------\n` +
-            `🎯 <b>ចំនួន User ដែលនឹងទទួល ៖</b> <b>${state.targetIds.length}</b>\n` +
-            `<code>${state.targetIds.join(', ')}</code>\n\n` +
-            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើ ]</b> ខាងក្រោម ៖</i>`;
-
-        const targetedBcastKb = Markup.inlineKeyboard([
-            [Markup.button.callback('🚀 ផ្ញើទៅកាន់ User ដែលបានជ្រើសរើស', `send_targeted_bcast_${msgId}`)],
-            [Markup.button.callback('❌ បោះបង់ (Cancel)', `cancel_targeted_bcast_${msgId}`)]
-        ]);
-
-        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
-
-        try {
-            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: targetedBcastKb.reply_markup });
-        } catch (e) {
-            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
-        }
-        return;
-    }
     // Unhandled Link Catch (Strict Separation between Admin Links & Customer Order Links)
     const isLink = text.toLowerCase().includes('http://') || text.toLowerCase().includes('https://') || text.toLowerCase().includes('tiktok.com') || text.toLowerCase().includes('t.me/');
     if (isLink) {

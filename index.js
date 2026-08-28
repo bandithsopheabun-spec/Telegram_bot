@@ -2457,7 +2457,7 @@ bot.on('text', async (ctx, next) => {
     if (isUrlInput) {
         const currentStep = state ? state.step : null;
         const isOrderStep = currentStep === 'AWAITING_LINK' || currentStep === 'AWAITING_POLICY_CONFIRM';
-        const isAdminConfigStep = currentStep === 'AWAITING_ADMIN_HOWTO_LINK' || currentStep === 'AWAITING_ADMIN_PAYWAY_LINK' || currentStep === 'AWAITING_ADMIN_BROADCAST';
+        const isAdminConfigStep = currentStep === 'AWAITING_ADMIN_HOWTO_LINK' || currentStep === 'AWAITING_ADMIN_PAYWAY_LINK' || currentStep === 'AWAITING_ADMIN_BROADCAST' || currentStep === 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS' || currentStep === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT';
 
         if (!isOrderStep && !isAdminConfigStep) {
             const hasAdminPrefix = text.toLowerCase().startsWith('l:') || text.toLowerCase().startsWith('edit:');
@@ -2949,11 +2949,52 @@ bot.on('text', async (ctx, next) => {
         ]);
 
         await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
-        
+
         try {
             await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
         } catch (e) {
             await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+        }
+        return;
+    }
+
+    if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS') {
+        const targetIds = [...new Set(text.split(/[,\s]+/).map(s => parseInt(s.trim())).filter(id => !isNaN(id) && id > 0))];
+        if (targetIds.length === 0) {
+            return ctx.replyWithHTML('❌ <b>Format មិនត្រឹមត្រូវ!</b>\nសូមផ្ញើ User ID ជាលេខ (ខណ្ឌដោយក្បៀស បើច្រើននាក់) ៖', Markup.keyboard([['🔐 Admin Menu']]).resize());
+        }
+        userState[userId] = { step: 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT', targetIds };
+        return ctx.replyWithHTML(
+            `✅ <b>បានកំណត់ Target ៖ ${targetIds.length} User(s)</b>\n<code>${targetIds.join(', ')}</code>\n\n` +
+            `✍️ <b>ឥឡូវសូមផ្ញើសារ</b> (Text/Photo/Video ។ល។) ដែលចង់ Broadcast ទៅកាន់ User ទាំងនេះ ៖`,
+            Markup.keyboard([['🔐 Admin Menu']]).resize()
+        );
+    }
+
+    if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT') {
+        delete userState[userId];
+        const msgId = ctx.message.message_id;
+        const fromChatId = ctx.chat.id;
+        pendingTargetedBroadcasts[msgId] = state.targetIds;
+
+        const previewPrompt =
+            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Targeted Broadcast Preview) ៖</b>\n` +
+            `----------------------------------------\n` +
+            `🎯 <b>ចំនួន User ដែលនឹងទទួល ៖</b> <b>${state.targetIds.length}</b>\n` +
+            `<code>${state.targetIds.join(', ')}</code>\n\n` +
+            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើ ]</b> ខាងក្រោម ៖</i>`;
+
+        const targetedBcastKb = Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 ផ្ញើទៅកាន់ User ដែលបានជ្រើសរើស', `send_targeted_bcast_${msgId}`)],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', `cancel_targeted_bcast_${msgId}`)]
+        ]);
+
+        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+
+        try {
+            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: targetedBcastKb.reply_markup });
+        } catch (e) {
+            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
         }
         return;
     }
@@ -3104,11 +3145,39 @@ bot.on('photo', async (ctx) => {
         ]);
 
         await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
-        
+
         try {
             await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
         } catch (e) {
             await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+        }
+        return;
+    }
+
+    if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT') {
+        delete userState[userId];
+        const msgId = ctx.message.message_id;
+        const fromChatId = ctx.chat.id;
+        pendingTargetedBroadcasts[msgId] = state.targetIds;
+
+        const previewPrompt =
+            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Targeted Broadcast Preview) ៖</b>\n` +
+            `----------------------------------------\n` +
+            `🎯 <b>ចំនួន User ដែលនឹងទទួល ៖</b> <b>${state.targetIds.length}</b>\n` +
+            `<code>${state.targetIds.join(', ')}</code>\n\n` +
+            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើ ]</b> ខាងក្រោម ៖</i>`;
+
+        const targetedBcastKb = Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 ផ្ញើទៅកាន់ User ដែលបានជ្រើសរើស', `send_targeted_bcast_${msgId}`)],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', `cancel_targeted_bcast_${msgId}`)]
+        ]);
+
+        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+
+        try {
+            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: targetedBcastKb.reply_markup });
+        } catch (e) {
+            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
         }
         return;
     }
@@ -3138,11 +3207,39 @@ bot.on(['video', 'audio', 'voice', 'document', 'sticker', 'video_note'], async (
         ]);
 
         await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
-        
+
         try {
             await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
         } catch (e) {
             await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+        }
+        return;
+    }
+
+    if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT') {
+        delete userState[userId];
+        const msgId = ctx.message.message_id;
+        const fromChatId = ctx.chat.id;
+        pendingTargetedBroadcasts[msgId] = state.targetIds;
+
+        const previewPrompt =
+            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Targeted Broadcast Preview) ៖</b>\n` +
+            `----------------------------------------\n` +
+            `🎯 <b>ចំនួន User ដែលនឹងទទួល ៖</b> <b>${state.targetIds.length}</b>\n` +
+            `<code>${state.targetIds.join(', ')}</code>\n\n` +
+            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើ ]</b> ខាងក្រោម ៖</i>`;
+
+        const targetedBcastKb = Markup.inlineKeyboard([
+            [Markup.button.callback('🚀 ផ្ញើទៅកាន់ User ដែលបានជ្រើសរើស', `send_targeted_bcast_${msgId}`)],
+            [Markup.button.callback('❌ បោះបង់ (Cancel)', `cancel_targeted_bcast_${msgId}`)]
+        ]);
+
+        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+
+        try {
+            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: targetedBcastKb.reply_markup });
+        } catch (e) {
+            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
         }
         return;
     }
@@ -3200,6 +3297,54 @@ bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
 });
 
 bot.action('cancel_bcast', async (ctx) => {
+    try {
+        await ctx.answerCbQuery('❌ បានបោះបង់សារប្រកាស');
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        await ctx.replyWithHTML('❌ <b>បានបោះបង់ការផ្ញើសារប្រកាសជូនដំណឹង។</b>', adminToolsKeyboard);
+    } catch (e) {}
+});
+
+// 🎯 TARGETED BROADCAST EXECUTION — only to the specific User IDs collected earlier
+bot.action(/^send_targeted_bcast_(\d+)$/, async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!');
+    const msgId = parseInt(ctx.match[1]);
+    const targetIds = pendingTargetedBroadcasts[msgId];
+    delete pendingTargetedBroadcasts[msgId];
+
+    if (!targetIds || targetIds.length === 0) {
+        try { return ctx.answerCbQuery('⚠️ Target list expired — សូមចាប់ផ្តើមម្តងទៀត!', { show_alert: true }); } catch (e) { return; }
+    }
+
+    try {
+        await ctx.answerCbQuery(`🚀 កំពុងផ្ញើសារទៅកាន់ ${targetIds.length} User...`);
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+
+    await ctx.replyWithHTML(`⏳ <b>កំពុងផ្ញើសារទៅកាន់ ${targetIds.length} User ដែលបានជ្រើសរើស...</b>`);
+
+    let success = 0, failed = 0;
+    for (const uId of targetIds) {
+        try {
+            await bot.telegram.copyMessage(uId, userId, msgId);
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    const reportMsg =
+        `✅ <b>បានផ្ញើសារ Targeted Broadcast ជោគជ័យ!</b>\n` +
+        `----------------------------------------\n\n` +
+        `🟢 <b>ជោគជ័យ ៖</b> <b>${success} Users</b>\n` +
+        `🔴 <b>បរាជ័យ (Block Bot / ID មិនត្រឹមត្រូវ) ៖</b> <b>${failed} Users</b>`;
+
+    return ctx.replyWithHTML(reportMsg, adminToolsKeyboard);
+});
+
+bot.action(/^cancel_targeted_bcast_(\d+)$/, async (ctx) => {
+    const msgId = parseInt(ctx.match[1]);
+    delete pendingTargetedBroadcasts[msgId];
     try {
         await ctx.answerCbQuery('❌ បានបោះបង់សារប្រកាស');
         await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
@@ -3585,8 +3730,15 @@ const adminManageAdminsKeyboard = Markup.keyboard([
 const adminToolsKeyboard = Markup.keyboard([
     ['🎥 · Start media', '🎥 · How to links'],
     ['🏷️ · Services & Prices', '📢 · Broadcast Message'],
+    ['🎯 · Broadcast to User(s)'],
     ['🔐 Admin Menu']
 ]).resize();
+
+// In-memory store for a targeted broadcast's recipient list, keyed by the
+// admin's message_id (the same key used for callback_data) — mirrors how
+// the all-users broadcast keys off msgId, but that flow always targets
+// getAllBroadcastUsers() so it never needed to remember a specific list.
+const pendingTargetedBroadcasts = {};
 
 // MAIN ADMIN CONTROL DASHBOARD (/admin, Admin Menu, 🔐 Admin Menu)
 bot.command(['admin', 'dashboard'], (ctx) => sendAdminDashboard(ctx));
@@ -4373,6 +4525,21 @@ bot.hears(['📢 · Broadcast Message', 'Broadcast Message', '/broadcast'], (ctx
 
     userState[userId] = { step: 'AWAITING_ADMIN_BROADCAST' };
     ctx.replyWithHTML(`📢 <b>Send the announcement message to broadcast to all users ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🎯 TARGETED BROADCAST — to one or several specific User IDs
+bot.hears(['🎯 · Broadcast to User(s)', 'Broadcast to User(s)'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS' };
+    ctx.replyWithHTML(
+        `🎯 <b>Broadcast to Specific User(s) ៖</b>\n\n` +
+        `✍️ <b>សូមផ្ញើ User ID</b> (Telegram Numeric ID) ដែលចង់ផ្ញើសារទៅកាន់ ៖\n` +
+        `• User តែម្នាក់ ៖ <code>521984577</code>\n` +
+        `• ច្រើននាក់ ៖ <code>521984577, 527660257, 7485372237</code> (ខណ្ឌដោយក្បៀស)`,
+        Markup.keyboard([['🔐 Admin Menu']]).resize()
+    );
 });
 
 // 🟢 BOT OPEN / 🔴 MAINTENANCE TOGGLE

@@ -2030,6 +2030,28 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(card, adminUsersKeyboard);
         }
 
+        // Must live inside this early AWAITING_ADMIN_ wrapper, not the later
+        // generic text handler — a User ID is typically 9-10 digits, which
+        // FLOW C's order-code-format check further down (any 6+ digit
+        // number) would otherwise misidentify as an Order ID lookup and
+        // intercept before this state is ever reached (confirmed live: a
+        // real User ID typed here produced "ORDER NOT FOUND" instead of
+        // advancing to the next step).
+        if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS') {
+            delete userState[userId];
+            const targetIds = [...new Set(text.split(/[,\s]+/).map(s => parseInt(s.trim())).filter(id => !isNaN(id) && id > 0))];
+            if (targetIds.length === 0) {
+                userState[userId] = { step: 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS' };
+                return ctx.replyWithHTML('❌ <b>Format មិនត្រឹមត្រូវ!</b>\nសូមផ្ញើ User ID ជាលេខ (ខណ្ឌដោយក្បៀស បើច្រើននាក់) ៖', Markup.keyboard([['🔐 Admin Menu']]).resize());
+            }
+            userState[userId] = { step: 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT', targetIds };
+            return ctx.replyWithHTML(
+                `✅ <b>បានកំណត់ Target ៖ ${targetIds.length} User(s)</b>\n<code>${targetIds.join(', ')}</code>\n\n` +
+                `✍️ <b>ឥឡូវសូមផ្ញើសារ</b> (Text/Photo/Video ។ល។) ដែលចង់ Broadcast ទៅកាន់ User ទាំងនេះ ៖`,
+                Markup.keyboard([['🔐 Admin Menu']]).resize()
+            );
+        }
+
         if (state.step === 'AWAITING_ADMIN_CREDIT_ID') {
             const targetId = parseInt(text.replace(/[^0-9]/g, ''));
             userState[userId] = { step: 'AWAITING_ADMIN_CREDIT_AMOUNT', targetId: targetId };
@@ -2956,19 +2978,6 @@ bot.on('text', async (ctx, next) => {
             await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
         }
         return;
-    }
-
-    if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS') {
-        const targetIds = [...new Set(text.split(/[,\s]+/).map(s => parseInt(s.trim())).filter(id => !isNaN(id) && id > 0))];
-        if (targetIds.length === 0) {
-            return ctx.replyWithHTML('❌ <b>Format មិនត្រឹមត្រូវ!</b>\nសូមផ្ញើ User ID ជាលេខ (ខណ្ឌដោយក្បៀស បើច្រើននាក់) ៖', Markup.keyboard([['🔐 Admin Menu']]).resize());
-        }
-        userState[userId] = { step: 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT', targetIds };
-        return ctx.replyWithHTML(
-            `✅ <b>បានកំណត់ Target ៖ ${targetIds.length} User(s)</b>\n<code>${targetIds.join(', ')}</code>\n\n` +
-            `✍️ <b>ឥឡូវសូមផ្ញើសារ</b> (Text/Photo/Video ។ល។) ដែលចង់ Broadcast ទៅកាន់ User ទាំងនេះ ៖`,
-            Markup.keyboard([['🔐 Admin Menu']]).resize()
-        );
     }
 
     if (state.step === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT') {

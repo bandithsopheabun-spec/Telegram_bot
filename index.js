@@ -949,7 +949,8 @@ async function finalizeOrder(userId, packageTitle, price, targetLink, customerFi
 
     const doneOrderKb = Markup.inlineKeyboard([
         [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${userId}`)],
-        [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)]
+        [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)],
+        [Markup.button.callback('❓ មូលហេតុផ្សេង (Other Reason)', `other_order_${cleanOrderId}_${userId}`)]
     ]);
 
     try {
@@ -990,6 +991,58 @@ async function finalizeOrder(userId, packageTitle, price, targetLink, customerFi
     }
 
     return { success: true, orderId, newBalance };
+}
+
+// Shared order lookup (package name only) reused by the "❓ Other Reason"
+// admin flow below — mirrors the same Supabase/cache lookup already
+// duplicated in the done_order/cancel_order action handlers further down.
+async function lookupOrderPackageName(rawOrderId, targetUserId) {
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .select('*')
+                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
+                .maybeSingle();
+            if (data) return data.package_name;
+        } catch (e) {}
+    }
+    if (userOrdersCache[targetUserId]) {
+        const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(rawOrderId.replace('#', '')));
+        if (item) return item.package_name;
+    }
+    return 'SMM Service';
+}
+
+// Sends a bilingual "your order needs attention" explanation to the customer
+// — used by the "❓ Other Reason" admin flow (e.g. "violates TikTok's Terms
+// of Service"). Unlike Done/Cancel, this does NOT change order status or
+// refund anything — it is purely an explanatory message so Admin can still
+// press Done or Cancel/Refund on the original order card afterward.
+async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, reasonKm, reasonEn) {
+    const userLangCode = getLang(targetUserId);
+    const reasonText = userLangCode === 'en' ? (reasonEn || reasonKm) : (reasonKm || reasonEn);
+    const msg = userLangCode === 'en' ?
+        `⚠️ <b>Your Order Needs Attention!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `📝 <b>Reason:</b> ${reasonText}\n\n` +
+        `💡 <i>Please contact us via @Blessing_Kh_Supports to resolve this.</i>` :
+        `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវការការយកចិត្តទុកដាក់បន្ថែម!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n\n` +
+        `💡 <i>សូមបងទំនាក់ទំនងមកប្អូនតាមរយៈ @Blessing_Kh_Supports ដើម្បីដោះស្រាយបញ្ហានេះ។</i>`;
+
+    const supportKb = Markup.inlineKeyboard([
+        [Markup.button.url(userLangCode === 'en' ? '💬 Contact Admin Support (7AM-10PM)' : '💬 ទាក់ទង Admin Support (7ព្រឹក-10យប់)', 'https://t.me/Blessing_Kh_Supports')]
+    ]);
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML', ...supportKb });
+    } catch (e) {}
 }
 
 // ==========================================
@@ -2086,6 +2139,17 @@ bot.on('text', async (ctx, next) => {
                 await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
             }
             return;
+        }
+
+        // Must live here too (same reasoning as the broadcast steps above) —
+        // a custom Order "Other Reason" is free text typed by Admin and would
+        // otherwise risk being intercepted by unrelated checks further down
+        // in the generic text handler (e.g. FLOW C's order-code-format check).
+        if (state.step === 'AWAITING_ADMIN_ORDER_OTHER_REASON') {
+            delete userState[userId];
+            const { targetUserId, fullOrderId, packageName } = state;
+            await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, text, text);
+            return ctx.replyWithHTML(`✅ <b>បានផ្ញើមូលហេតុទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>`, getAdminMainKeyboard());
         }
 
         if (state.step === 'AWAITING_ADMIN_CREDIT_ID') {
@@ -5238,6 +5302,93 @@ bot.action(/^cancel_order_/, async (ctx) => {
     try {
         await bot.telegram.sendMessage(targetUserId, customerNotifyMsg, { parse_mode: 'HTML' });
     } catch (e) {}
+});
+
+// Admin clicks [ ❓ មូលហេតុផ្សេង (Other Reason) ] in the Purchase Order Group
+// — e.g. the target link violates TikTok's Terms of Service. Unlike Done/
+// Cancel this does NOT touch processedOrderActions or clear the original
+// card's buttons, so Admin can still press Done or Cancel/Refund afterward;
+// it just sends the customer an explanatory message (no refund).
+bot.action(/^other_order_/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+
+    try { await ctx.answerCbQuery(); } catch (e) {}
+
+    const pickerKb = Markup.inlineKeyboard([
+        [Markup.button.callback('🚫 ខុសលក្ខខ័ណ្ឌ TikTok (Violates TikTok ToS)', `reason_tiktok_${rawOrderId}_${targetUserId}`)],
+        [Markup.button.callback('✍️ សរសេរមូលហេតុផ្សេង (Custom Reason)', `reason_custom_${rawOrderId}_${targetUserId}`)],
+        [Markup.button.callback('❌ បិទ (Close)', 'reason_close')]
+    ]);
+
+    try {
+        await ctx.reply(
+            `❓ <b>ជ្រើសរើសមូលហេតុសម្រាប់ផ្ញើទៅភ្ញៀវ Order ${fullOrderId} ៖</b>\n` +
+            `<i>(សារនេះនឹងមិនធ្វើការវេរលុយសងវិញទេ — គ្រាន់តែជាសារពន្យល់ប៉ុណ្ណោះ)</i>`,
+            { parse_mode: 'HTML', ...pickerKb }
+        );
+    } catch (e) {}
+});
+
+// Preset reason: TikTok ToS violation — sends immediately, no extra typing.
+bot.action(/^reason_tiktok_/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+
+    const packageName = await lookupOrderPackageName(rawOrderId, targetUserId);
+    await notifyCustomerOrderReason(
+        targetUserId, fullOrderId, packageName,
+        'ខុសលក្ខខ័ណ្ឌប្រើប្រាស់ TikTok (Violates TikTok Terms of Service)',
+        "Violates TikTok's Terms of Service (ToS)"
+    );
+
+    try { await ctx.answerCbQuery('✅ បានផ្ញើមូលហេតុទៅភ្ញៀវ!'); } catch (e) {}
+    try {
+        await ctx.editMessageText(`✅ <b>បានផ្ញើមូលហេតុ "ខុសលក្ខខ័ណ្ឌ TikTok" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>`, { parse_mode: 'HTML' });
+    } catch (e) {}
+});
+
+// Custom reason: prompts Admin to type free text, then forwards it verbatim.
+bot.action(/^reason_custom_/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+
+    const packageName = await lookupOrderPackageName(rawOrderId, targetUserId);
+    userState[adminId] = { step: 'AWAITING_ADMIN_ORDER_OTHER_REASON', targetUserId, fullOrderId, packageName };
+
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    try {
+        await ctx.editMessageText(`✍️ <b>សូមវាយសារមូលហេតុសម្រាប់ផ្ញើទៅភ្ញៀវ Order ${fullOrderId} ៖</b>`, { parse_mode: 'HTML' });
+    } catch (e) {}
+});
+
+bot.action('reason_close', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    try { await ctx.editMessageText('❌ បានបិទ។'); } catch (e) {}
 });
 
 // ADMIN COMMAND: /setstatus <ORDER_ID> <STATUS> (e.g. /setstatus ORD-749927 Completed)

@@ -985,10 +985,13 @@ async function finalizeOrder(userId, packageTitle, price, targetLink, customerFi
     ]);
 
     try {
-        await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, groupOrderMsg, {
+        const sentOrderMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, groupOrderMsg, {
             parse_mode: 'HTML',
             ...doneOrderKb
         });
+        // Tracked so postProblemTicket can later "move" this card out of the
+        // Purchase Order Group if Admin escalates it via "❓ Other Reason".
+        orderNotifyMessages[orderId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentOrderMsg.message_id };
         console.log('✅ Sent new order notification to Admin Private Channel!');
     } catch (e) {
         console.error('⚠️ Could not send order notification to admin channel:', e.message);
@@ -1078,31 +1081,49 @@ async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName,
 }
 
 // In-memory tracking of the currently-open Problem-Solve ticket message per
-// order — {chatId, messageId} — so resolveProblemTicket (called from
-// done_order/cancel_order below) knows which message to delete once Admin
-// finishes handling it. Lost on a restart (like pendingAutoDeposits), but
-// the Supabase problem_tickets row (see postProblemTicket) is the durable
-// record; an orphaned ticket message left behind after a rare restart is
-// harmless and can be deleted by Admin manually.
+// order — {chatId, messageId} — so done_order/cancel_order below can tell
+// whether they're being resolved straight from that ticket (see
+// isTicketResolution there) and resolveProblemTicket knows what to clear.
+// Lost on a restart (like pendingAutoDeposits), but the Supabase
+// problem_tickets row (see postProblemTicket) is the durable record.
 const problemTickets = {};
 
-// Posts a Ticket to Blessing.Kh_Problem_Solve when Admin sends an "Other
-// Reason" explanation — keeps orders needing follow-up separate from the
-// regular Purchase Order group. Also logs an "Open" row in Supabase
-// problem_tickets so Admin/Users & Balances can show resolution history
-// (see the AWAITING_ADMIN_FIND_USER card). If a ticket for this order is
-// already open (Admin sent a 2nd reason), the old ticket message is
-// replaced rather than left duplicated.
+// Tracks the {chatId, messageId} of each order's card in the Purchase Order
+// Group — populated by finalizeOrder when the card is first sent. Lets
+// postProblemTicket below "move" an escalated order out of that group by
+// editing the card down to a short marker instead of leaving it looking
+// like a normal order still needing Done/Cancel action.
+const orderNotifyMessages = {};
+
+// Escalates an order to Blessing.Kh_Problem_Solve when Admin sends an
+// "❓ Other Reason" explanation: edits the original Purchase Order Group
+// card down to a short "moved" marker (no buttons), then posts a full
+// Ticket — WITH its own Done/Cancel-Refund buttons, reusing the same
+// done_order_/cancel_order_ callback_data — to the Problem-Solve group, so
+// Admin resolves it from there instead. Also logs an "Open" row in
+// Supabase problem_tickets so Admin/Users & Balances can show resolution
+// history. If a ticket for this order is already open (Admin sent a 2nd
+// reason), the old ticket message is replaced rather than left duplicated.
 async function postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, reasonText) {
     if (problemTickets[fullOrderId]) {
         try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
         delete problemTickets[fullOrderId];
     }
 
+    // Bail out BEFORE touching the original order card — if the ticket group
+    // isn't linked yet, Admin still needs the original card's Done/Cancel
+    // buttons intact to resolve the order some other way. Only "move" the
+    // card once the replacement ticket has actually been posted below.
     if (!problemSolveGroupId) {
         console.error('⚠️ problemSolveGroupId not set — run /setproblemgroup inside Blessing.Kh_Problem_Solve. Ticket not posted for', fullOrderId);
         return;
     }
+
+    const cleanOrderId = fullOrderId.replace('#', '');
+    const ticketKb = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${targetUserId}`)],
+        [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${targetUserId}`)]
+    ]);
 
     const ticketMsg =
         `🎫 <b>PROBLEM TICKET</b>\n` +
@@ -1112,14 +1133,31 @@ async function postProblemTicket(fullOrderId, targetUserId, packageName, targetL
         `📦 <b>Package:</b> ${packageName}\n` +
         `🔗 <b>Link:</b> ${targetLink || 'N/A'}\n` +
         `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n` +
-        `🟡 <b>Status:</b> <b>Open</b>\n\n` +
-        `<i>Ticket នេះនឹងលុបស្វ័យប្រវត្តិពេល Admin ចុច Done ឬ Cancel/Refund លើ Order ដើមវិញ។</i>`;
+        `🟡 <b>Status:</b> <b>Open</b>`;
 
+    let ticketSent = false;
     try {
-        const sent = await bot.telegram.sendMessage(problemSolveGroupId, ticketMsg, { parse_mode: 'HTML' });
+        const sent = await bot.telegram.sendMessage(problemSolveGroupId, ticketMsg, { parse_mode: 'HTML', ...ticketKb });
         problemTickets[fullOrderId] = { chatId: problemSolveGroupId, messageId: sent.message_id };
+        ticketSent = true;
     } catch (e) {
         console.error('⚠️ Could not post Problem Ticket:', e.message);
+    }
+
+    // Only "move" the original card out of the Purchase Order Group once the
+    // replacement ticket is confirmed live — otherwise the order would be
+    // left with no actionable buttons anywhere.
+    if (ticketSent) {
+        const orderMsgRef = orderNotifyMessages[fullOrderId];
+        if (orderMsgRef) {
+            try {
+                await bot.telegram.editMessageText(
+                    orderMsgRef.chatId, orderMsgRef.messageId, undefined,
+                    `➡️ <b>បានផ្ទេរទៅ Problem_Solve</b>\n🆔 <code>${fullOrderId}</code>`,
+                    { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+                );
+            } catch (e) {}
+        }
     }
 
     if (supabase) {
@@ -1132,15 +1170,13 @@ async function postProblemTicket(fullOrderId, targetUserId, packageName, targetL
     }
 }
 
-// Called from done_order/cancel_order once Admin resolves the order —
-// deletes the open Ticket message (if any) and marks the Supabase row
-// Resolved, so it shows correctly in the per-user history.
+// Called from done_order/cancel_order once Admin resolves the order — the
+// ticket message itself (if this WAS a ticket resolution) is already
+// deleted by the caller via ctx.deleteMessage(); this just clears the
+// tracking map and marks the Supabase row Resolved.
 async function resolveProblemTicket(fullOrderId, resolutionStatus) {
-    const ticket = problemTickets[fullOrderId];
-    if (ticket) {
-        try { await bot.telegram.deleteMessage(ticket.chatId, ticket.messageId); } catch (e) {}
-        delete problemTickets[fullOrderId];
-    }
+    delete problemTickets[fullOrderId];
+    delete orderNotifyMessages[fullOrderId];
 
     if (supabase) {
         try {
@@ -5285,10 +5321,21 @@ bot.action(/^done_order_/, async (ctx) => {
         } catch (e) { return; }
     }
     processedOrderActions.add(fullOrderId);
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
-    // If this order had an open "❓ Other Reason" ticket in
-    // Blessing.Kh_Problem_Solve, remove it now that Admin has resolved it.
+    // If Admin is resolving this straight from its Problem-Solve ticket
+    // (escalated earlier via "❓ Other Reason"), delete that ticket message
+    // entirely instead of leaving a "done" banner behind — keeps
+    // Blessing.Kh_Problem_Solve showing only orders still needing action.
+    // A normal order card (no ticket) keeps the existing edit-in-place flow.
+    const isTicketResolution = problemTickets[fullOrderId] &&
+        problemTickets[fullOrderId].chatId === ctx.chat.id &&
+        problemTickets[fullOrderId].messageId === ctx.callbackQuery.message.message_id;
+
+    if (isTicketResolution) {
+        try { await ctx.deleteMessage(); } catch (e) {}
+    } else {
+        try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    }
     await resolveProblemTicket(fullOrderId, 'Resolved (Done)');
 
     // 1. Update status in Supabase DB
@@ -5324,16 +5371,19 @@ bot.action(/^done_order_/, async (ctx) => {
         await ctx.answerCbQuery('✅ បានបញ្ចប់ការបញ្ជាទិញដោយជោគជ័យ!');
     } catch (e) {}
 
-    // Edit message in Group LazR v3.0 Supports
-    const groupDoneText = 
-        `✅ <b>បានបញ្ចប់ការបញ្ជាទិញ ${fullOrderId} ដោយជោគជ័យ!</b>\n` +
-        `----------------------------------------\n` +
-        `👤 <b>Admin ៖</b> ${adminName}\n` +
-        `🟢 <b>Status:</b> <b>Completed ✅</b>`;
+    // Edit message in Group LazR v3.0 Supports (skipped if this was a
+    // Problem-Solve ticket — that message was already deleted above)
+    if (!isTicketResolution) {
+        const groupDoneText =
+            `✅ <b>បានបញ្ចប់ការបញ្ជាទិញ ${fullOrderId} ដោយជោគជ័យ!</b>\n` +
+            `----------------------------------------\n` +
+            `👤 <b>Admin ៖</b> ${adminName}\n` +
+            `🟢 <b>Status:</b> <b>Completed ✅</b>`;
 
-    try {
-        await ctx.editMessageText(groupDoneText, { parse_mode: 'HTML' });
-    } catch (e) {}
+        try {
+            await ctx.editMessageText(groupDoneText, { parse_mode: 'HTML' });
+        } catch (e) {}
+    }
 
     // AUTOMATICALLY SEND NOTIFICATION TO CUSTOMER (BILINGUAL WITH 12-24H NOTICE)!
     const userLangCode = getLang(targetUserId);
@@ -5386,10 +5436,21 @@ bot.action(/^cancel_order_/, async (ctx) => {
         } catch (e) { return; }
     }
     processedOrderActions.add(fullOrderId);
-    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
-    // If this order had an open "❓ Other Reason" ticket in
-    // Blessing.Kh_Problem_Solve, remove it now that Admin has resolved it.
+    // If Admin is resolving this straight from its Problem-Solve ticket
+    // (escalated earlier via "❓ Other Reason"), delete that ticket message
+    // entirely instead of leaving a "canceled" banner behind — keeps
+    // Blessing.Kh_Problem_Solve showing only orders still needing action.
+    // A normal order card (no ticket) keeps the existing edit-in-place flow.
+    const isTicketResolution = problemTickets[fullOrderId] &&
+        problemTickets[fullOrderId].chatId === ctx.chat.id &&
+        problemTickets[fullOrderId].messageId === ctx.callbackQuery.message.message_id;
+
+    if (isTicketResolution) {
+        try { await ctx.deleteMessage(); } catch (e) {}
+    } else {
+        try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+    }
     await resolveProblemTicket(fullOrderId, 'Resolved (Cancel/Refund)');
 
     let targetOrder = null;
@@ -5432,18 +5493,21 @@ bot.action(/^cancel_order_/, async (ctx) => {
         await ctx.answerCbQuery('❌ បានបោះបង់ និង វេរលុយសងអតិថិជនវិញរួចរាល់!');
     } catch (e) {}
 
-    // Edit message in Admin Channel
-    const groupCancelText = 
-        `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
-        `----------------------------------------\n` +
-        `👤 <b>Admin ៖</b> ${adminName}\n` +
-        `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
-        `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
-        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
+    // Edit message in Admin Channel (skipped if this was a Problem-Solve
+    // ticket — that message was already deleted above)
+    if (!isTicketResolution) {
+        const groupCancelText =
+            `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
+            `----------------------------------------\n` +
+            `👤 <b>Admin ៖</b> ${adminName}\n` +
+            `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
+            `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
+            `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
 
-    try {
-        await ctx.editMessageText(groupCancelText, { parse_mode: 'HTML' });
-    } catch (e) {}
+        try {
+            await ctx.editMessageText(groupCancelText, { parse_mode: 'HTML' });
+        } catch (e) {}
+    }
 
     // AUTOMATICALLY SEND REFUND NOTIFICATION TO CUSTOMER!
     const customerNotifyMsg = 

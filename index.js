@@ -21,6 +21,14 @@ const SUPPORT_LINK = (process.env.SUPPORT_LINK && !process.env.SUPPORT_LINK.incl
 const CHANNEL_LINK = process.env.CHANNEL_LINK || 'https://t.me/Blessing_Kh_Public/3';
 const TARGET_ADMIN_CHAT_ID = process.env.GROUP_CHAT_ID ? parseInt(process.env.GROUP_CHAT_ID) : -1003953732694;
 
+// Blessing.Kh_Problem_Solve — a separate group where "❓ Other Reason" order
+// tickets are posted, kept apart from the regular Purchase Order group so
+// Admin isn't hunting through normal orders to find ones needing follow-up.
+// No hardcoded default (unlike TARGET_ADMIN_CHAT_ID above) since this group
+// is new — Admin sets it once via /setproblemgroup, run inside that group;
+// see rehydrateProblemSolveGroupId for how it survives a redeploy.
+let problemSolveGroupId = process.env.PROBLEM_SOLVE_GROUP_ID ? parseInt(process.env.PROBLEM_SOLVE_GROUP_ID) : null;
+
 // Supabase Client Setup (Optional & Safe)
 let createClient = null;
 try {
@@ -670,6 +678,29 @@ async function saveMode1QrPhotoToSupabase(buffer) {
     }
 }
 
+// Restores problemSolveGroupId (see /setproblemgroup below) after a redeploy
+// — same reasoning as rehydrateMode1QrPhoto above, since Render's disk (and
+// this in-memory variable) is wiped on every restart.
+async function rehydrateProblemSolveGroupId() {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('bot_settings').select('value').eq('key', 'problem_solve_group_id').maybeSingle();
+        if (error || !data || !data.value) return;
+        problemSolveGroupId = parseInt(data.value);
+        console.log('✅ Rehydrated problemSolveGroupId from Supabase:', problemSolveGroupId);
+    } catch (e) {
+        console.error('⚠️ rehydrateProblemSolveGroupId error:', e.message);
+    }
+}
+
+function saveProblemSolveGroupId(chatId) {
+    if (!supabase) return;
+    supabase.from('bot_settings')
+        .upsert([{ key: 'problem_solve_group_id', value: String(chatId), updated_at: new Date().toISOString() }], { onConflict: 'key' })
+        .then(() => {})
+        .catch(e => console.error('⚠️ saveProblemSolveGroupId error:', e.message));
+}
+
 // NBC's Bakong Open API allows only 100 requests/day per token (discovered
 // the hard way: a customer's real, successful payment sat un-credited all
 // day because the 7s-interval polling had already burned through the daily
@@ -993,10 +1024,11 @@ async function finalizeOrder(userId, packageTitle, price, targetLink, customerFi
     return { success: true, orderId, newBalance };
 }
 
-// Shared order lookup (package name only) reused by the "❓ Other Reason"
-// admin flow below — mirrors the same Supabase/cache lookup already
-// duplicated in the done_order/cancel_order action handlers further down.
-async function lookupOrderPackageName(rawOrderId, targetUserId) {
+// Shared order lookup (package name + target link) reused by the
+// "❓ Other Reason" admin flow below — mirrors the same Supabase/cache
+// lookup already duplicated in the done_order/cancel_order action handlers
+// further down.
+async function lookupOrderInfo(rawOrderId, targetUserId) {
     if (supabase) {
         try {
             const { data } = await supabase
@@ -1004,14 +1036,14 @@ async function lookupOrderPackageName(rawOrderId, targetUserId) {
                 .select('*')
                 .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
                 .maybeSingle();
-            if (data) return data.package_name;
+            if (data) return { packageName: data.package_name, targetLink: data.target_link };
         } catch (e) {}
     }
     if (userOrdersCache[targetUserId]) {
         const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(rawOrderId.replace('#', '')));
-        if (item) return item.package_name;
+        if (item) return { packageName: item.package_name, targetLink: item.target_link };
     }
-    return 'SMM Service';
+    return { packageName: 'SMM Service', targetLink: null };
 }
 
 // Sends a bilingual "your order needs attention" explanation to the customer
@@ -1043,6 +1075,81 @@ async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName,
     try {
         await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML', ...supportKb });
     } catch (e) {}
+}
+
+// In-memory tracking of the currently-open Problem-Solve ticket message per
+// order — {chatId, messageId} — so resolveProblemTicket (called from
+// done_order/cancel_order below) knows which message to delete once Admin
+// finishes handling it. Lost on a restart (like pendingAutoDeposits), but
+// the Supabase problem_tickets row (see postProblemTicket) is the durable
+// record; an orphaned ticket message left behind after a rare restart is
+// harmless and can be deleted by Admin manually.
+const problemTickets = {};
+
+// Posts a Ticket to Blessing.Kh_Problem_Solve when Admin sends an "Other
+// Reason" explanation — keeps orders needing follow-up separate from the
+// regular Purchase Order group. Also logs an "Open" row in Supabase
+// problem_tickets so Admin/Users & Balances can show resolution history
+// (see the AWAITING_ADMIN_FIND_USER card). If a ticket for this order is
+// already open (Admin sent a 2nd reason), the old ticket message is
+// replaced rather than left duplicated.
+async function postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, reasonText) {
+    if (problemTickets[fullOrderId]) {
+        try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
+        delete problemTickets[fullOrderId];
+    }
+
+    if (!problemSolveGroupId) {
+        console.error('⚠️ problemSolveGroupId not set — run /setproblemgroup inside Blessing.Kh_Problem_Solve. Ticket not posted for', fullOrderId);
+        return;
+    }
+
+    const ticketMsg =
+        `🎫 <b>PROBLEM TICKET</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📲 <b>User ID:</b> <code>${targetUserId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `🔗 <b>Link:</b> ${targetLink || 'N/A'}\n` +
+        `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n` +
+        `🟡 <b>Status:</b> <b>Open</b>\n\n` +
+        `<i>Ticket នេះនឹងលុបស្វ័យប្រវត្តិពេល Admin ចុច Done ឬ Cancel/Refund លើ Order ដើមវិញ។</i>`;
+
+    try {
+        const sent = await bot.telegram.sendMessage(problemSolveGroupId, ticketMsg, { parse_mode: 'HTML' });
+        problemTickets[fullOrderId] = { chatId: problemSolveGroupId, messageId: sent.message_id };
+    } catch (e) {
+        console.error('⚠️ Could not post Problem Ticket:', e.message);
+    }
+
+    if (supabase) {
+        try {
+            await supabase.from('problem_tickets').insert([{
+                order_id: fullOrderId, telegram_id: targetUserId, package_name: packageName,
+                reason: reasonText, status: 'Open'
+            }]);
+        } catch (e) {}
+    }
+}
+
+// Called from done_order/cancel_order once Admin resolves the order —
+// deletes the open Ticket message (if any) and marks the Supabase row
+// Resolved, so it shows correctly in the per-user history.
+async function resolveProblemTicket(fullOrderId, resolutionStatus) {
+    const ticket = problemTickets[fullOrderId];
+    if (ticket) {
+        try { await bot.telegram.deleteMessage(ticket.chatId, ticket.messageId); } catch (e) {}
+        delete problemTickets[fullOrderId];
+    }
+
+    if (supabase) {
+        try {
+            await supabase.from('problem_tickets')
+                .update({ status: resolutionStatus, resolved_at: new Date().toISOString() })
+                .eq('order_id', fullOrderId)
+                .eq('status', 'Open');
+        } catch (e) {}
+    }
 }
 
 // ==========================================
@@ -1332,6 +1439,7 @@ async function bootLoadAllConfigs() {
         await rehydrateJsonConfig('media_config', MEDIA_FILE);
         await rehydrateJsonConfig('admins_config', ADMINS_FILE);
         await rehydrateJsonConfig('resellers_config', RESELLERS_FILE);
+        await rehydrateProblemSolveGroupId();
     }
     loadDynamicPackages();
     loadHowtoConfig();
@@ -2072,13 +2180,35 @@ bot.on('text', async (ctx, next) => {
             const bal = getBalance(targetId);
             const count = getOrdersCount(targetId);
 
-            const card = 
+            let card =
                 `👤 <b>BLESSING.KH CUSTOMER PROFILE</b>\n----------------------------------------\n` +
                 `🆔 <b>Telegram ID:</b> <code>${targetId}</code>\n` +
                 `👛 <b>Balance:</b> <b>$${bal.toFixed(2)} USD</b> 💵\n` +
                 `📦 <b>Total Orders:</b> ${count} Orders\n` +
                 `🏅 <b>VIP Rank:</b> ${getUserRank(count)}\n` +
                 `📅 <b>Last Active:</b> ${new Date().toISOString().split('T')[0]}`;
+
+            // Problem-ticket history — lets Admin see past "❓ Other Reason"
+            // issues for this customer (e.g. repeat TikTok ToS violations)
+            // without digging through Blessing.Kh_Problem_Solve manually.
+            if (supabase) {
+                try {
+                    const { data: tickets } = await supabase
+                        .from('problem_tickets')
+                        .select('*')
+                        .eq('telegram_id', targetId)
+                        .order('created_at', { ascending: false })
+                        .limit(5);
+                    if (tickets && tickets.length > 0) {
+                        card += `\n\n🎫 <b>Problem Ticket History (${tickets.length} recent):</b>`;
+                        tickets.forEach(t => {
+                            const dateStr = new Date(t.created_at).toLocaleDateString('en-GB', { timeZone: 'Asia/Phnom_Penh' });
+                            const statusIcon = t.status === 'Open' ? '🟡' : '✅';
+                            card += `\n${statusIcon} <code>${t.order_id}</code> — ${t.reason} <i>(${t.status}, ${dateStr})</i>`;
+                        });
+                    }
+                } catch (e) {}
+            }
 
             return ctx.replyWithHTML(card, adminUsersKeyboard);
         }
@@ -2147,9 +2277,13 @@ bot.on('text', async (ctx, next) => {
         // in the generic text handler (e.g. FLOW C's order-code-format check).
         if (state.step === 'AWAITING_ADMIN_ORDER_OTHER_REASON') {
             delete userState[userId];
-            const { targetUserId, fullOrderId, packageName } = state;
+            const { targetUserId, fullOrderId, packageName, targetLink } = state;
             await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, text, text);
-            return ctx.replyWithHTML(`✅ <b>បានផ្ញើមូលហេតុទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>`, getAdminMainKeyboard());
+            await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, text);
+            return ctx.replyWithHTML(
+                `✅ <b>បានផ្ញើមូលហេតុទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`,
+                getAdminMainKeyboard()
+            );
         }
 
         if (state.step === 'AWAITING_ADMIN_CREDIT_ID') {
@@ -3668,6 +3802,22 @@ bot.hears([/\/id/i, /^\/id/i, /^id$/i], (ctx) => {
     }
 });
 
+// /setproblemgroup — run once, inside Blessing.Kh_Problem_Solve itself, to
+// link that group as the destination for "❓ Other Reason" order tickets.
+bot.command(['setproblemgroup'], (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    if (!ctx.chat || (ctx.chat.type !== 'group' && ctx.chat.type !== 'supergroup')) {
+        return ctx.replyWithHTML('⚠️ សូមប្រើ command នេះនៅក្នុងក្រុម Blessing.Kh_Problem_Solve ដោយផ្ទាល់!');
+    }
+    problemSolveGroupId = ctx.chat.id;
+    saveProblemSolveGroupId(problemSolveGroupId);
+    ctx.replyWithHTML(
+        `✅ <b>បានកំណត់ក្រុមនេះជា Problem-Solve Ticket Group រួចរាល់!</b>\n` +
+        `🆔 <b>Chat ID:</b> <code>${problemSolveGroupId}</code>\n\n` +
+        `ចាប់ពីពេលនេះទៅ រាល់ការចុច "❓ មូលហេតុផ្សេង" លើ Order នឹងផ្ញើ Ticket មកកន្លែងនេះ។`
+    );
+});
+
 // Listen to Channel posts for /id command in Channels
 bot.on('channel_post', (ctx) => {
     if (ctx.chat && ctx.chat.type === 'channel') {
@@ -5137,6 +5287,10 @@ bot.action(/^done_order_/, async (ctx) => {
     processedOrderActions.add(fullOrderId);
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
+    // If this order had an open "❓ Other Reason" ticket in
+    // Blessing.Kh_Problem_Solve, remove it now that Admin has resolved it.
+    await resolveProblemTicket(fullOrderId, 'Resolved (Done)');
+
     // 1. Update status in Supabase DB
     let targetOrder = null;
     if (supabase) {
@@ -5233,6 +5387,10 @@ bot.action(/^cancel_order_/, async (ctx) => {
     }
     processedOrderActions.add(fullOrderId);
     try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+
+    // If this order had an open "❓ Other Reason" ticket in
+    // Blessing.Kh_Problem_Solve, remove it now that Admin has resolved it.
+    await resolveProblemTicket(fullOrderId, 'Resolved (Cancel/Refund)');
 
     let targetOrder = null;
 
@@ -5351,16 +5509,18 @@ bot.action(/^reason_tiktok_/, async (ctx) => {
     const rawOrderId = parts.slice(2).join('_');
     const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
 
-    const packageName = await lookupOrderPackageName(rawOrderId, targetUserId);
+    const { packageName, targetLink } = await lookupOrderInfo(rawOrderId, targetUserId);
+    const reasonKm = 'ខុសលក្ខខ័ណ្ឌប្រើប្រាស់ TikTok (Violates TikTok Terms of Service)';
     await notifyCustomerOrderReason(
         targetUserId, fullOrderId, packageName,
-        'ខុសលក្ខខ័ណ្ឌប្រើប្រាស់ TikTok (Violates TikTok Terms of Service)',
+        reasonKm,
         "Violates TikTok's Terms of Service (ToS)"
     );
+    await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, reasonKm);
 
     try { await ctx.answerCbQuery('✅ បានផ្ញើមូលហេតុទៅភ្ញៀវ!'); } catch (e) {}
     try {
-        await ctx.editMessageText(`✅ <b>បានផ្ញើមូលហេតុ "ខុសលក្ខខ័ណ្ឌ TikTok" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>`, { parse_mode: 'HTML' });
+        await ctx.editMessageText(`✅ <b>បានផ្ញើមូលហេតុ "ខុសលក្ខខ័ណ្ឌ TikTok" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`, { parse_mode: 'HTML' });
     } catch (e) {}
 });
 
@@ -5377,8 +5537,8 @@ bot.action(/^reason_custom_/, async (ctx) => {
     const rawOrderId = parts.slice(2).join('_');
     const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
 
-    const packageName = await lookupOrderPackageName(rawOrderId, targetUserId);
-    userState[adminId] = { step: 'AWAITING_ADMIN_ORDER_OTHER_REASON', targetUserId, fullOrderId, packageName };
+    const { packageName, targetLink } = await lookupOrderInfo(rawOrderId, targetUserId);
+    userState[adminId] = { step: 'AWAITING_ADMIN_ORDER_OTHER_REASON', targetUserId, fullOrderId, packageName, targetLink };
 
     try { await ctx.answerCbQuery(); } catch (e) {}
     try {

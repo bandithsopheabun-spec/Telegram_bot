@@ -53,3 +53,25 @@ CREATE TABLE IF NOT EXISTS public.bot_settings (
     value TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- 5. Problem Tickets Table — logs every "❓ Other Reason" explanation Admin
+-- sends a customer about their order (e.g. "violates TikTok's Terms of
+-- Service"), so Admin/Users & Balances can show a per-customer resolution
+-- history. A row starts 'Open' and moves to 'Resolved (Done)' or
+-- 'Resolved (Cancel/Refund)' once Admin presses the matching button on the
+-- original order card (see postProblemTicket/resolveProblemTicket in
+-- index.js). Independent of the Blessing.Kh_Problem_Solve Telegram ticket
+-- message itself, which is deleted on resolution rather than kept.
+CREATE TABLE IF NOT EXISTS public.problem_tickets (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    telegram_id BIGINT NOT NULL,
+    package_name TEXT,
+    reason TEXT,
+    status TEXT NOT NULL DEFAULT 'Open',
+    admin_name TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    resolved_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS idx_problem_tickets_telegram_id ON public.problem_tickets(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_problem_tickets_order_id ON public.problem_tickets(order_id);

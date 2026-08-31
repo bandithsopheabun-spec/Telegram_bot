@@ -1049,6 +1049,39 @@ async function lookupOrderInfo(rawOrderId, targetUserId) {
     return { packageName: 'SMM Service', targetLink: null };
 }
 
+// One-tap preset explanations offered on the "❓ Other Reason" picker
+// (see the other_order_ action below), alongside the free-text Custom
+// Reason option. Keyed by a short id used in callback_data
+// (reason_<key>_<orderId>_<userId>) — keys must stay single words (no
+// underscores) since callback_data parsing splits on '_'.
+const PRESET_ORDER_REASONS = {
+    tiktok: {
+        emoji: '🚫',
+        km: 'ខុសលក្ខខ័ណ្ឌប្រើប្រាស់ TikTok (Violates TikTok Terms of Service)',
+        en: "Violates TikTok's Terms of Service (ToS)"
+    },
+    private: {
+        emoji: '🔒',
+        km: 'Link/គណនីជា Private (មិនអាចមើលឃើញ)',
+        en: 'Link/account is set to Private (not viewable)'
+    },
+    wronglink: {
+        emoji: '🔗',
+        km: 'Link មិនត្រឹមត្រូវ / មិនមែន TikTok',
+        en: 'Invalid link / not a TikTok link'
+    },
+    underage: {
+        emoji: '🔞',
+        km: 'គណនីទាបជាងអាយុ 18 ឆ្នាំ / មាតិកាហាមឃាត់',
+        en: 'Account under 18 years old / prohibited content'
+    },
+    deleted: {
+        emoji: '🗑️',
+        km: 'Video ត្រូវបានលុប / រកមិនឃើញ',
+        en: 'Video was deleted / not found'
+    }
+};
+
 // Sends a bilingual "your order needs attention" explanation to the customer
 // — used by the "❓ Other Reason" admin flow (e.g. "violates TikTok's Terms
 // of Service"). Unlike Done/Cancel, this does NOT change order status or
@@ -5590,7 +5623,9 @@ bot.action(/^other_order_/, async (ctx) => {
     try { await ctx.answerCbQuery(); } catch (e) {}
 
     const pickerKb = Markup.inlineKeyboard([
-        [Markup.button.callback('🚫 ខុសលក្ខខ័ណ្ឌ TikTok (Violates TikTok ToS)', `reason_tiktok_${rawOrderId}_${targetUserId}`)],
+        ...Object.entries(PRESET_ORDER_REASONS).map(([key, r]) =>
+            [Markup.button.callback(`${r.emoji} ${r.km}`, `reason_${key}_${rawOrderId}_${targetUserId}`)]
+        ),
         [Markup.button.callback('✍️ សរសេរមូលហេតុផ្សេង (Custom Reason)', `reason_custom_${rawOrderId}_${targetUserId}`)],
         [Markup.button.callback('❌ បិទ (Close)', 'reason_close')]
     ]);
@@ -5604,8 +5639,10 @@ bot.action(/^other_order_/, async (ctx) => {
     } catch (e) {}
 });
 
-// Preset reason: TikTok ToS violation — sends immediately, no extra typing.
-bot.action(/^reason_tiktok_/, async (ctx) => {
+// Preset reasons (see PRESET_ORDER_REASONS above): sends immediately, no
+// extra typing. One handler covers all preset keys instead of duplicating
+// near-identical code per reason.
+bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) => {
     const adminId = ctx.from.id;
     if (!isAdmin(adminId)) {
         try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
@@ -5616,19 +5653,19 @@ bot.action(/^reason_tiktok_/, async (ctx) => {
     const targetUserId = parseInt(parts.pop());
     const rawOrderId = parts.slice(2).join('_');
     const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+    const presetKey = parts[1];
+    const preset = PRESET_ORDER_REASONS[presetKey];
+    if (!preset) {
+        try { return ctx.answerCbQuery('⚠️ Unknown reason preset', { show_alert: true }); } catch (e) { return; }
+    }
 
     const { packageName, targetLink } = await lookupOrderInfo(rawOrderId, targetUserId);
-    const reasonKm = 'ខុសលក្ខខ័ណ្ឌប្រើប្រាស់ TikTok (Violates TikTok Terms of Service)';
-    await notifyCustomerOrderReason(
-        targetUserId, fullOrderId, packageName,
-        reasonKm,
-        "Violates TikTok's Terms of Service (ToS)"
-    );
-    await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, reasonKm);
+    await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en);
+    await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, preset.km);
 
     try { await ctx.answerCbQuery('✅ បានផ្ញើមូលហេតុទៅភ្ញៀវ!'); } catch (e) {}
     try {
-        await ctx.editMessageText(`✅ <b>បានផ្ញើមូលហេតុ "ខុសលក្ខខ័ណ្ឌ TikTok" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`, { parse_mode: 'HTML' });
+        await ctx.editMessageText(`✅ <b>បានផ្ញើមូលហេតុ "${preset.km}" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`, { parse_mode: 'HTML' });
     } catch (e) {}
 });
 

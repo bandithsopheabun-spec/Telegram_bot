@@ -5331,6 +5331,13 @@ bot.action(/^done_order_/, async (ctx) => {
         problemTickets[fullOrderId].chatId === ctx.chat.id &&
         problemTickets[fullOrderId].messageId === ctx.callbackQuery.message.message_id;
 
+    // Captured BEFORE resolveProblemTicket clears it below — lets a ticket
+    // resolution still report the final status back on the original card in
+    // Purchase Order Group (which so far only shows the "➡️ moved" marker),
+    // so that group keeps a complete record even though Admin resolved the
+    // order from Blessing.Kh_Problem_Solve instead.
+    const orderCardRef = orderNotifyMessages[fullOrderId];
+
     if (isTicketResolution) {
         try { await ctx.deleteMessage(); } catch (e) {}
     } else {
@@ -5371,15 +5378,24 @@ bot.action(/^done_order_/, async (ctx) => {
         await ctx.answerCbQuery('✅ បានបញ្ចប់ការបញ្ជាទិញដោយជោគជ័យ!');
     } catch (e) {}
 
-    // Edit message in Group LazR v3.0 Supports (skipped if this was a
-    // Problem-Solve ticket — that message was already deleted above)
-    if (!isTicketResolution) {
-        const groupDoneText =
-            `✅ <b>បានបញ្ចប់ការបញ្ជាទិញ ${fullOrderId} ដោយជោគជ័យ!</b>\n` +
-            `----------------------------------------\n` +
-            `👤 <b>Admin ៖</b> ${adminName}\n` +
-            `🟢 <b>Status:</b> <b>Completed ✅</b>`;
+    const groupDoneText =
+        `✅ <b>បានបញ្ចប់ការបញ្ជាទិញ ${fullOrderId} ដោយជោគជ័យ!</b>\n` +
+        `----------------------------------------\n` +
+        `👤 <b>Admin ៖</b> ${adminName}\n` +
+        `🟢 <b>Status:</b> <b>Completed ✅</b>`;
 
+    if (isTicketResolution) {
+        // Ticket message is already gone (deleted above) — report the same
+        // final status back on the original Purchase Order Group card.
+        if (orderCardRef) {
+            try {
+                await bot.telegram.editMessageText(orderCardRef.chatId, orderCardRef.messageId, undefined, groupDoneText, {
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: [] }
+                });
+            } catch (e) {}
+        }
+    } else {
         try {
             await ctx.editMessageText(groupDoneText, { parse_mode: 'HTML' });
         } catch (e) {}
@@ -5446,6 +5462,13 @@ bot.action(/^cancel_order_/, async (ctx) => {
         problemTickets[fullOrderId].chatId === ctx.chat.id &&
         problemTickets[fullOrderId].messageId === ctx.callbackQuery.message.message_id;
 
+    // Captured BEFORE resolveProblemTicket clears it below — lets a ticket
+    // resolution still report the final status back on the original card in
+    // Purchase Order Group (which so far only shows the "➡️ moved" marker),
+    // so that group keeps a complete record even though Admin resolved the
+    // order from Blessing.Kh_Problem_Solve instead.
+    const orderCardRef = orderNotifyMessages[fullOrderId];
+
     if (isTicketResolution) {
         try { await ctx.deleteMessage(); } catch (e) {}
     } else {
@@ -5493,17 +5516,26 @@ bot.action(/^cancel_order_/, async (ctx) => {
         await ctx.answerCbQuery('❌ បានបោះបង់ និង វេរលុយសងអតិថិជនវិញរួចរាល់!');
     } catch (e) {}
 
-    // Edit message in Admin Channel (skipped if this was a Problem-Solve
-    // ticket — that message was already deleted above)
-    if (!isTicketResolution) {
-        const groupCancelText =
-            `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
-            `----------------------------------------\n` +
-            `👤 <b>Admin ៖</b> ${adminName}\n` +
-            `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
-            `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
-            `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
+    const groupCancelText =
+        `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
+        `----------------------------------------\n` +
+        `👤 <b>Admin ៖</b> ${adminName}\n` +
+        `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
+        `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
+        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
 
+    if (isTicketResolution) {
+        // Ticket message is already gone (deleted above) — report the same
+        // final status back on the original Purchase Order Group card.
+        if (orderCardRef) {
+            try {
+                await bot.telegram.editMessageText(orderCardRef.chatId, orderCardRef.messageId, undefined, groupCancelText, {
+                    parse_mode: 'HTML',
+                    reply_markup: { inline_keyboard: [] }
+                });
+            } catch (e) {}
+        }
+    } else {
         try {
             await ctx.editMessageText(groupCancelText, { parse_mode: 'HTML' });
         } catch (e) {}

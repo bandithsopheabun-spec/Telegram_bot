@@ -2073,6 +2073,18 @@ bot.hears(/(.*)=\s*\$?([0-9.]+)/, (ctx, next) => {
     const text = ctx.message.text.trim();
     const state = userState[userId];
 
+    // A real package button is always plain text ("1.2K Likes = $2.00") —
+    // never a URL. Without this guard, a TikTok link containing a query
+    // param like "?is_from_webapp=1" also matches "=digits" and gets
+    // misread as a package selection, silently resetting an in-progress
+    // order back to the Policy & Warning screen instead of reaching the
+    // AWAITING_LINK handler that finalizes it (confirmed live: a customer's
+    // link with "?is_from_webapp=1&sender_device=pc" looped the order back
+    // to Policy & Warning instead of completing).
+    if (text.toLowerCase().includes('http') || text.toLowerCase().includes('tiktok.com')) {
+        return next();
+    }
+
     const hasAdminPrefix = text.toLowerCase().startsWith('l:') || text.toLowerCase().startsWith('edit:');
     const isInAdminState = isAdmin(userId) && (state && state.step && state.step.startsWith('AWAITING_ADMIN_'));
 

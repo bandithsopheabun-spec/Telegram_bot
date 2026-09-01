@@ -1118,7 +1118,11 @@ const PRESET_ORDER_REASONS = {
     underage: {
         emoji: '🔞',
         km: 'គណនីទាបជាងអាយុ 18 ឆ្នាំ / មាតិកាហាមឃាត់',
-        en: 'Account under 18 years old / prohibited content'
+        en: 'Account under 18 years old / prohibited content',
+        // Instead of a dead-end explanation, let the customer fix this
+        // themselves by submitting a different, compliant link — reusing
+        // the order they already paid for (no refund, no new charge).
+        requiresNewLink: true
     },
     deleted: {
         emoji: '🗑️',
@@ -1155,6 +1159,36 @@ async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName,
 
     try {
         await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML', ...supportKb });
+    } catch (e) {}
+}
+
+// Used instead of notifyCustomerOrderReason for presets with
+// requiresNewLink: true (currently only "🔞 Under 18 / prohibited
+// content") — rather than a dead-end explanation, lets the customer fix
+// the problem themselves by submitting a different, compliant link for
+// the SAME order (no refund, no new charge). Sets AWAITING_REPLACEMENT_LINK
+// so their next link is picked up by the handler in bot.on('text', ...).
+async function requestReplacementLink(targetUserId, fullOrderId, packageName, reasonKm, reasonEn) {
+    const userLangCode = getLang(targetUserId);
+    const reasonText = userLangCode === 'en' ? (reasonEn || reasonKm) : (reasonKm || reasonEn);
+    const msg = userLangCode === 'en' ?
+        `⚠️ <b>Your Order Needs a New Link!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `📝 <b>Reason:</b> ${reasonText}\n\n` +
+        `🔗 <b>Please send a new, valid TikTok link for this order below</b> — no need to pay again, we'll use your existing purchase.` :
+        `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវការ Link ថ្មី!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n\n` +
+        `🔗 <b>សូមផ្ញើ Link TikTok ត្រឹមត្រូវថ្មីសម្រាប់ Order នេះនៅខាងក្រោម</b> — មិនចាំបាច់បង់ប្រាក់ម្តងទៀតទេ យើងប្រើការទិញដដែល។`;
+
+    userState[targetUserId] = { step: 'AWAITING_REPLACEMENT_LINK', fullOrderId, packageName };
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML' });
     } catch (e) {}
 }
 
@@ -2971,7 +3005,7 @@ bot.on('text', async (ctx, next) => {
     
     if (isUrlInput) {
         const currentStep = state ? state.step : null;
-        const isOrderStep = currentStep === 'AWAITING_LINK' || currentStep === 'AWAITING_POLICY_CONFIRM';
+        const isOrderStep = currentStep === 'AWAITING_LINK' || currentStep === 'AWAITING_POLICY_CONFIRM' || currentStep === 'AWAITING_REPLACEMENT_LINK';
         const isAdminConfigStep = currentStep === 'AWAITING_ADMIN_HOWTO_LINK' || currentStep === 'AWAITING_ADMIN_PAYWAY_LINK' || currentStep === 'AWAITING_ADMIN_BROADCAST' || currentStep === 'AWAITING_ADMIN_TARGETED_BROADCAST_IDS' || currentStep === 'AWAITING_ADMIN_TARGETED_BROADCAST_CONTENT';
 
         if (!isOrderStep && !isAdminConfigStep) {
@@ -3373,6 +3407,54 @@ bot.on('text', async (ctx, next) => {
         // finalizeOrder() already DMs the customer their order confirmation
         // (same message/keyboard whether ordering from the bot chat or the
         // website) — nothing further to send here.
+        return;
+    }
+
+    // Customer replaces their target link after Admin flagged the order
+    // (currently only the "🔞 Under 18 / prohibited content" preset — see
+    // requestReplacementLink) — updates the EXISTING order in place, no
+    // refund and no new charge, then puts it back in front of Admin.
+    if (state.step === 'AWAITING_REPLACEMENT_LINK') {
+        if (!text.toLowerCase().includes('http') && !text.toLowerCase().includes('tiktok.com')) {
+            const err = lang === 'km' ? `❌ <b>Link មិនត្រឹមត្រូវ!</b>\nសូមផ្ញើ Link TikTok ដែលត្រឹមត្រូវ (ឧទាហរណ៍៖ https://vt.tiktok.com/...):` : `❌ <b>Invalid Link!</b>\nPlease send a valid TikTok Link (e.g. https://vt.tiktok.com/...):`;
+            return ctx.replyWithHTML(err);
+        }
+
+        const { fullOrderId, packageName } = state;
+        const newLink = text;
+        delete userState[userId];
+
+        if (supabase) {
+            try {
+                await supabase
+                    .from('orders')
+                    .update({ target_link: newLink, status: 'Processing' })
+                    .or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`);
+            } catch (e) {}
+        }
+        if (userOrdersCache[userId]) {
+            const item = userOrdersCache[userId].find(o => o.order_id.includes(fullOrderId.replace('#', '')));
+            if (item) {
+                item.target_link = newLink;
+                item.status = 'Processing';
+            }
+        }
+
+        const confirmMsg = lang === 'km' ?
+            `✅ <b>បានទទួល Link ថ្មីសម្រាប់ Order ${fullOrderId} រួចរាល់!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin នឹងបន្តដំណើរការជូនអ្នកឆាប់ៗនេះ។` :
+            `✅ <b>New link received for Order ${fullOrderId}!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin will continue processing your order shortly.`;
+        await ctx.replyWithHTML(confirmMsg, getMainKeyboard(lang));
+
+        const adminMsg =
+            `🔄 <b>ភ្ញៀវបានផ្ញើ Link ថ្មី (Order ${fullOrderId})</b>\n` +
+            `----------------------------------------\n` +
+            `📲 <b>User ID:</b> <code>${userId}</code>\n` +
+            `📦 <b>Package:</b> ${packageName}\n` +
+            `🔗 <b>Link ថ្មី:</b> ${newLink}\n` +
+            `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
+        try {
+            await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' });
+        } catch (e) {}
         return;
     }
 
@@ -5795,12 +5877,19 @@ bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) =
     }
 
     const { packageName, targetLink } = await lookupOrderInfo(rawOrderId, targetUserId);
-    await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en);
+    if (preset.requiresNewLink) {
+        await requestReplacementLink(targetUserId, fullOrderId, packageName, preset.km, preset.en);
+    } else {
+        await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en);
+    }
     await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, preset.km);
 
     try { await ctx.answerCbQuery('✅ បានផ្ញើមូលហេតុទៅភ្ញៀវ!'); } catch (e) {}
     try {
-        await ctx.editMessageText(`✅ <b>បានផ្ញើមូលហេតុ "${preset.km}" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`, { parse_mode: 'HTML' });
+        const confirmNote = preset.requiresNewLink
+            ? `✅ <b>បានស្នើសុំ Link ថ្មីពីភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`
+            : `✅ <b>បានផ្ញើមូលហេតុ "${preset.km}" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`;
+        await ctx.editMessageText(confirmNote, { parse_mode: 'HTML' });
     } catch (e) {}
 });
 

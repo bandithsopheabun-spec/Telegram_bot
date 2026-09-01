@@ -3452,6 +3452,25 @@ bot.on('text', async (ctx, next) => {
             `✅ <b>New link received for Order ${fullOrderId}!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin will continue processing your order shortly.`;
         await ctx.replyWithHTML(confirmMsg, getMainKeyboard(lang));
 
+        // The old Problem-Solve ticket (if any) was about the link that's
+        // now been replaced — it's stale, so close it out rather than
+        // leaving two live places (that old ticket + this new card) both
+        // claiming to be the actionable one for the same order.
+        if (problemTickets[fullOrderId]) {
+            try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
+            delete problemTickets[fullOrderId];
+        }
+
+        // Full action buttons (not just a plain notice) — the new link isn't
+        // guaranteed correct either, so Admin needs Done/Cancel/Other Reason
+        // available immediately, same as the original order card.
+        const cleanOrderId = fullOrderId.replace('#', '');
+        const newLinkKb = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${userId}`)],
+            [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)],
+            [Markup.button.callback('❓ មូលហេតុផ្សេង (Other Reason)', `other_order_${cleanOrderId}_${userId}`)]
+        ]);
+
         const adminMsg =
             `🔄 <b>ភ្ញៀវបានផ្ញើ Link ថ្មី (Order ${fullOrderId})</b>\n` +
             `----------------------------------------\n` +
@@ -3460,7 +3479,11 @@ bot.on('text', async (ctx, next) => {
             `🔗 <b>Link ថ្មី:</b> ${newLink}\n` +
             `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
         try {
-            await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' });
+            const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML', ...newLinkKb });
+            // This message is now the order's live "card" — Other Reason /
+            // Done / Cancel acting on it should edit/move THIS message going
+            // forward, not the old (already superseded) one.
+            orderNotifyMessages[fullOrderId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
         } catch (e) {}
         return;
     }

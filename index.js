@@ -981,7 +981,7 @@ async function dbCreateOrder(userId, orderId, packageName, price, targetLink) {
 // (balance check, deduction, order record, admin notification) lives in one
 // place instead of being duplicated per channel.
 async function finalizeOrder(userId, packageTitle, price, targetLink, customerFirstName) {
-    const currentBalance = getBalance(userId);
+    const currentBalance = await getFreshBalance(userId);
     if (currentBalance < price) {
         return { success: false, error: 'insufficient_balance', currentBalance };
     }
@@ -1554,6 +1554,19 @@ function isReseller(userId) {
 
 function getEffectivePrice(retailPrice, userId) {
     return isReseller(userId) ? retailPrice * (1 - resellerDiscountPercent / 100) : retailPrice;
+}
+
+// SECURITY: looks up a package's real catalog price by name — used by
+// POST /api/orders to derive the price server-side instead of trusting
+// whatever price a website request body claims (the Telegram bot chat
+// flow was always safe here since its price comes from a server-built
+// button label, never from client input).
+function findCatalogPackagePrice(packageName) {
+    for (const cat of ['likes', 'views', 'followers']) {
+        const pkg = dynamicPackagePrices[cat].find(p => p.name === packageName);
+        if (pkg) return pkg.price;
+    }
+    return null;
 }
 
 function updateDynamicPackagePrice(targetName, newPrice) {
@@ -2686,15 +2699,19 @@ bot.on('text', async (ctx, next) => {
         if (isNaN(amount) || amount <= 0) {
             return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>\nសូមចុច [ Add Funds/Wallet ] ម្ដងទៀត។', getMainKeyboard(lang));
         }
+        // SECURITY: this used to credit the self-reported amount directly
+        // with no cap and no human review — anyone could type any number
+        // (e.g. 999999999) and receive it instantly. Route through the same
+        // Admin Approve/Reject flow every other manual deposit uses instead
+        // of trusting the customer's own claim of what they paid.
+        if (amount > 100000) {
+            return ctx.replyWithHTML('⚠️ <b>ចំនួនទឹកប្រាក់ធំពេក (លើសពី $100,000 USD)!</b>\nសូមទាក់ទង Admin Support ដោយផ្ទាល់សម្រាប់ការទូទាត់ធំៗ។', getMainKeyboard(lang));
+        }
 
         let bonusPercent = (isBonusPromoOn && amount >= bonusMinDeposit) ? bonusPercentage : 0;
         let bonusAmount = (amount * bonusPercent) / 100;
         let totalCredit = amount + bonusAmount;
         const depId = `DEP${Math.floor(100000 + Math.random() * 900000)}`;
-
-        const currentBal = getBalance(userId);
-        const newBal = currentBal + totalCredit;
-        await dbUpdateBalance(userId, newBal);
 
         if (supabase) {
             try {
@@ -2703,40 +2720,45 @@ bot.on('text', async (ctx, next) => {
                     telegram_id: userId,
                     amount: amount,
                     bonus: bonusAmount,
-                    status: 'Approved (PayWay Verified)'
+                    status: 'Pending'
                 }]);
             } catch (e) {}
         }
 
-        const successMsg = lang === 'en' ?
-            `🎉 <b>ABA PayWay Payment Successful!</b>\n` +
+        const pendingMsg = lang === 'en' ?
+            `⏳ <b>Payment confirmation sent to Admin!</b>\n` +
             `----------------------------------------\n` +
-            `💳 <b>Deposit Amount:</b> $${amount.toFixed(2)} USD\n` +
-            `🎁 <b>Bonus:</b> +$${bonusAmount.toFixed(2)} USD\n` +
-            `💰 <b>New Wallet Balance:</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
-            `⚡ Thank you for your payment!` :
-            `🎉 <b>ABA PayWay ទូទាត់ប្រាក់ជោគជ័យ!</b>\n` +
+            `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
+            `🎁 <b>Bonus:</b> +$${bonusAmount.toFixed(2)} USD\n\n` +
+            `⚡ Your wallet will be credited once Admin verifies your payment.` :
+            `⏳ <b>បានផ្ញើសំណើទូទាត់ទៅ Admin ជោគជ័យ!</b>\n` +
             `----------------------------------------\n` +
-            `💳 <b>ទឹកប្រាក់បញ្ចូល៖</b> $${amount.toFixed(2)} USD\n` +
-            `🎁 <b>ថែម Bonus៖</b> +$${bonusAmount.toFixed(2)} USD\n` +
-            `💰 <b>តុល្យភាពកាបូបលុយថ្មី៖</b> <b>$${newBal.toFixed(2)} USD</b>\n\n` +
-            `⚡ អរគុណសម្រាប់ការទូទាត់ប្រាក់!`;
+            `💳 <b>ចំនួនប្រាក់៖</b> $${amount.toFixed(2)} USD\n` +
+            `🎁 <b>Bonus៖</b> +$${bonusAmount.toFixed(2)} USD\n\n` +
+            `⚡ កាបូបលុយរបស់អ្នកនឹងត្រូវបានបញ្ចូល ភ្លាមៗពេល Admin ផ្ទៀងផ្ទាត់ការទូទាត់របស់អ្នករួច។`;
 
-        await ctx.replyWithHTML(successMsg, getMainKeyboard(lang));
+        await ctx.replyWithHTML(pendingMsg, getMainKeyboard(lang));
 
-        // Post to Purchase Order Group (-1003953732694)
-        const adminMsg = 
-            `⚡ <b>AUTO-DEPOSIT APPROVED ( ABA PayWay )</b>\n` +
+        const adminMsg =
+            `💳 <b>NEW DEPOSIT SUBMITTED (Mode 3: ABA PayWay — Self-Reported Amount)</b>\n` +
             `----------------------------------------\n` +
             `🆔 <b>Deposit ID:</b> <code>#${depId}</code>\n` +
             `📲 <b>User ID:</b> <code>${userId}</code>\n` +
             `👤 <b>Customer:</b> ${ctx.from.first_name || 'Customer'}\n` +
             `💳 <b>Amount:</b> $${amount.toFixed(2)} USD\n` +
             `🎁 <b>Bonus:</b> +$${bonusAmount.toFixed(2)} USD\n` +
-            `🟢 <b>Status:</b> Auto-Credited ⚡`;
+            `💰 <b>Total to Credit:</b> $${totalCredit.toFixed(2)} USD\n` +
+            `⚠️ <i>Customer-reported amount — please verify a real ABA PayWay payment was received before approving.</i>\n` +
+            `⏳ <b>Status:</b> Pending Approval ⏳`;
+
+        const adminApprovalKb = Markup.inlineKeyboard([
+            [Markup.button.callback('✅ យល់ព្រម (Approve)', `approve_dep_${depId}_${userId}_${amount}_${bonusAmount}`)],
+            [Markup.button.callback('❌ បដិសេធ (Reject)', `reject_dep_${depId}_${userId}`)]
+        ]);
 
         try {
-            await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML' });
+            const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML', ...adminApprovalKb });
+            depositNotifyMessages[depId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
         } catch (e) {}
         return;
     }
@@ -2974,9 +2996,11 @@ bot.on('text', async (ctx, next) => {
 
         if (depositMode === 'PAYWAY') {
             const isKm = lang === 'km';
-            const md5Hash = require('crypto').createHash('md5').update(depositId).digest('hex');
-            registerPendingAutoDeposit(depositId, userId, amount, bonusAmount, md5Hash, 'PAYWAY');
-
+            // NOT registered into pendingAutoDeposits — PayWay has no
+            // signed webhook this integration can trust (see the /payway
+            // handler's PAYWAY_WEBHOOK_SECRET gate), so every PayWay
+            // deposit is settled exclusively through the safe manual
+            // "💳 I Have Paid" -> Admin Approve flow below, same as Mode 1.
             const paywayMsg = isKm ?
                 `🏦 <b>ទូទាត់តាម ABA PayWay (Link ទូទាត់ប្រាក់)</b>\n----------------------------------------\n\n` +
                 `💳 <b>ចំនួនប្រាក់ Deposit ៖ $${amount.toFixed(2)} USD</b>\n` +
@@ -3986,6 +4010,17 @@ const processedOrderActions = new Set(); // Prevents an order being Done AND Can
 // admin's own private chat — can also update that original card instead of
 // leaving it stuck showing "⏳ Pending Approval" forever.
 const depositNotifyMessages = {};
+
+// SECURITY: the amount/bonus actually quoted to a website user when their
+// deposit QR was generated (POST /api/deposits) — POST /api/deposits/:id/
+// confirm below MUST use this instead of trusting amount/bonusAmount in its
+// own request body. Unlike a Telegram button's callback_data (which the
+// user can only click, never edit), a website request body is fully
+// attacker-controlled — without this, anyone could create a real $1
+// deposit to obtain a valid depositId, then call .../confirm with a
+// fabricated amount like 100000 and have that fake total shown on Admin's
+// approval card. Keyed by depositId; consumed (deleted) on confirm.
+const websiteDepositQuotes = {};
 let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/ABAPAYJj498612l';
 // howtoVideoLinks is declared earlier (near loadHowtoConfig/saveHowtoConfig) so the
 // startup loadHowtoConfig() call can assign it without a temporal-dead-zone error.
@@ -5987,14 +6022,22 @@ http.createServer(async (req, res) => {
                 return sendJson(res, 503, { error: 'maintenance_mode' });
             }
             const body = await readJsonBody(req);
-            const { packageName, price, targetLink } = body;
-            if (!packageName || !price || !targetLink) {
+            const { packageName, targetLink } = body;
+            if (!packageName || !targetLink) {
                 return sendJson(res, 400, { error: 'missing_fields' });
             }
             if (!targetLink.toLowerCase().includes('http')) {
                 return sendJson(res, 400, { error: 'invalid_link' });
             }
-            const result = await finalizeOrder(sessionUserId, packageName, parseFloat(price), targetLink, null);
+            // SECURITY: price is derived server-side from the real catalog,
+            // never taken from the request body — otherwise a client could
+            // submit any price it wants (e.g. $0.01) for a real package.
+            const catalogPrice = findCatalogPackagePrice(packageName);
+            if (catalogPrice === null) {
+                return sendJson(res, 400, { error: 'invalid_package' });
+            }
+            const price = getEffectivePrice(catalogPrice, sessionUserId);
+            const result = await finalizeOrder(sessionUserId, packageName, price, targetLink, null);
             if (!result.success) {
                 return sendJson(res, 400, { error: result.error, currentBalance: result.currentBalance });
             }
@@ -6069,6 +6112,9 @@ http.createServer(async (req, res) => {
             if (isAutoMode) {
                 registerPendingAutoDeposit(depositId, sessionUserId, amount, bonusAmount, md5Hash, depositMode);
             }
+            // Record what was actually quoted so /confirm can't be tricked
+            // into crediting a different, client-supplied amount later.
+            websiteDepositQuotes[depositId] = { userId: sessionUserId, amount, bonusAmount, createdAt: Date.now() };
 
             return sendJson(res, 200, {
                 depositId, amount, bonusAmount,
@@ -6092,15 +6138,26 @@ http.createServer(async (req, res) => {
         // handler, so approve_dep/reject_dep need no changes to handle it.
         if (apiPath.startsWith('/api/deposits/') && apiPath.endsWith('/confirm') && req.method === 'POST') {
             const depositId = apiPath.split('/')[3];
-            const body = await readJsonBody(req);
-            const amount = parseFloat(body.amount) || 0;
-            const bonusAmount = parseFloat(body.bonusAmount) || 0;
+            await readJsonBody(req); // body is no longer trusted for amount/bonus — see websiteDepositQuotes
+
+            // Use the amount actually quoted when the QR was generated, NOT
+            // whatever the client's request body claims — a website request
+            // body can be freely rewritten (unlike a Telegram button's
+            // tamper-proof callback_data), so trusting it here would let
+            // anyone confirm a real depositId with a fabricated amount.
+            const quote = websiteDepositQuotes[depositId];
+            if (!quote || quote.userId !== sessionUserId) {
+                return sendJson(res, 400, { error: 'deposit_not_found_or_expired' });
+            }
+            const amount = quote.amount;
+            const bonusAmount = quote.bonusAmount;
             const totalCredit = amount + bonusAmount;
 
             if (processedDepositIds.has(depositId) || processedDepositIds.has(`cancel_${depositId}`)) {
                 return sendJson(res, 409, { error: 'already_processed' });
             }
             processedDepositIds.add(depositId);
+            delete websiteDepositQuotes[depositId];
 
             // This is the actual "commit" moment for Manual/PayWay deposits
             // — the customer confirmed they paid, so only NOW does it become
@@ -6194,7 +6251,20 @@ http.createServer(async (req, res) => {
                 const depId = data.order_reference_no;
                 const item = depId && pendingAutoDeposits[depId];
 
-                if (item) {
+                // SECURITY: this integration was never activated with real Wing
+                // credentials (no confirmed webhook signature format), so — same
+                // reasoning as the /payway webhook above — an unauthenticated
+                // POST here could otherwise fabricate a "payment succeeded" for
+                // any depId/amount just from a Deposit ID the customer already
+                // saw before paying. Require a shared secret WE control until
+                // Wing's real webhook signing spec is confirmed and wired up.
+                const wingWebhookSecret = process.env.WING_WEBHOOK_SECRET;
+                const suppliedSecret = req.url.split('?')[1] ? new URLSearchParams(req.url.split('?')[1]).get('secret') : (data.secret || null);
+                const isAuthorized = wingWebhookSecret && suppliedSecret === wingWebhookSecret;
+
+                if (item && !isAuthorized) {
+                    console.warn('⚠️ Rejected unauthenticated Wing webhook call (WING_WEBHOOK_SECRET not set or mismatched) for depId:', depId);
+                } else if (item) {
                     // Validate the paid amount is at least the expected price —
                     // per Wing's own doc: "must reject every transaction that
                     // responds with an amount less than your product/service price."
@@ -6286,6 +6356,25 @@ http.createServer(async (req, res) => {
                     for (const [key, value] of params.entries()) { data[key] = value; }
                 }
                 const depId = data.tran_id || data.bill_number || data.deposit_id;
+
+                // SECURITY: this endpoint has no way to cryptographically verify
+                // it actually came from ABA (this integration only has a
+                // merchant payment LINK, not a real ABA merchant-API webhook
+                // secret) — without a gate, anyone who knows a Deposit ID
+                // (shown to the customer themselves before they've paid) could
+                // POST here directly and get credited for free. Require a
+                // shared secret WE control until real ABA webhook credentials
+                // exist; unset by default, so this auto-credit path stays off
+                // and every PayWay deposit instead goes through the existing
+                // safe manual "I Have Paid" -> Admin Approve flow.
+                const paywayWebhookSecret = process.env.PAYWAY_WEBHOOK_SECRET;
+                const suppliedSecret = req.url.split('?')[1] ? new URLSearchParams(req.url.split('?')[1]).get('secret') : (data.secret || null);
+                const isAuthorized = paywayWebhookSecret && suppliedSecret === paywayWebhookSecret;
+                if (!isAuthorized) {
+                    console.warn('⚠️ Rejected unauthenticated PayWay webhook call (PAYWAY_WEBHOOK_SECRET not set or mismatched) for depId:', depId);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ status: 'ignored' }));
+                }
 
                 if (depId && pendingAutoDeposits[depId]) {
                     const item = pendingAutoDeposits[depId];

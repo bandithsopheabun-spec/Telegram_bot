@@ -1185,10 +1185,17 @@ async function requestReplacementLink(targetUserId, fullOrderId, packageName, re
         `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n\n` +
         `🔗 <b>សូមផ្ញើ Link TikTok ត្រឹមត្រូវថ្មីសម្រាប់ Order នេះនៅខាងក្រោម</b> — មិនចាំបាច់បង់ប្រាក់ម្តងទៀតទេ យើងប្រើការទិញដដែល។`;
 
+    // In case the customer would rather talk to a person than send a new
+    // link themselves — same Contact Support button notifyCustomerOrderReason
+    // offers for every other preset.
+    const supportKb = Markup.inlineKeyboard([
+        [Markup.button.url(userLangCode === 'en' ? '💬 Contact Admin Support (7AM-10PM)' : '💬 ទាក់ទង Admin Support (7ព្រឹក-10យប់)', 'https://t.me/Blessing_Kh_Supports')]
+    ]);
+
     userState[targetUserId] = { step: 'AWAITING_REPLACEMENT_LINK', fullOrderId, packageName };
 
     try {
-        await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML' });
+        await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML', ...supportKb });
     } catch (e) {}
 }
 

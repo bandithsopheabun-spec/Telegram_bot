@@ -729,7 +729,7 @@ function canCallBakongApi() {
 async function autoCreditDeposit(depId, item) {
     delete pendingAutoDeposits[depId];
     const userId = item.userId;
-    const currentBal = getBalance(userId);
+    const currentBal = await getFreshBalance(userId);
     const newBal = currentBal + item.totalCredit;
     await dbUpdateBalance(userId, newBal);
 
@@ -846,6 +846,33 @@ function getLang(userId) {
 
 function getBalance(userId) {
     return userBalances[userId] || 0.0;
+}
+
+// getBalance() above only reads the in-memory cache, which is only
+// populated for a user once dbGetUser() has run for them THIS process
+// lifetime (e.g. when they /start the bot). Any balance-WRITING flow that
+// targets a user other than the live sender — Admin Credit/Deduct, deposit
+// approval (manual or auto-payment engine/webhook), order refund — can
+// reach a user who hasn't been re-cached since the last redeploy (a stale
+// inline button click, an admin typing a raw ID, a webhook firing hours
+// later). Computing newBalance from a stale $0.00 there silently destroys
+// the customer's real balance the moment dbUpdateBalance writes it back.
+// Confirmed live: Admin's "Find user" showed $0.00/0 Orders for a
+// customer who actually had $5.25 and real orders in "All Users" (which
+// queries Supabase directly). Always call this instead of getBalance()
+// wherever the result feeds into a NEW balance that gets written back.
+async function getFreshBalance(userId) {
+    if (supabase) {
+        try {
+            const { data } = await supabase.from('users').select('balance').eq('telegram_id', userId).maybeSingle();
+            if (data) {
+                const bal = parseFloat(data.balance || 0);
+                userBalances[userId] = bal;
+                return bal;
+            }
+        } catch (e) {}
+    }
+    return getBalance(userId);
 }
 
 function setBalance(userId, amount) {
@@ -2258,8 +2285,27 @@ bot.on('text', async (ctx, next) => {
         if (state.step === 'AWAITING_ADMIN_FIND_USER') {
             delete userState[userId];
             const targetId = parseInt(text.replace(/[^0-9]/g, ''));
-            const bal = getBalance(targetId);
-            const count = getOrdersCount(targetId);
+
+            // getBalance()/getOrdersCount() only read the in-memory cache,
+            // which is only populated for users who've interacted with the
+            // bot since the last server restart — for anyone else this
+            // silently showed $0.00 / 0 Orders even when Supabase had real
+            // data (confirmed live: a user with a real $5.25 balance and
+            // real orders in "All Users" showed $0.00 / 0 Orders here).
+            // getFreshBalance() fetches from Supabase directly instead of
+            // trusting the cache (and refreshes the cache while at it); the
+            // order count needs its own direct query the same way.
+            let bal = await getFreshBalance(targetId);
+            let count = getOrdersCount(targetId);
+            if (supabase) {
+                try {
+                    const { count: orderCount } = await supabase.from('orders').select('*', { count: 'exact', head: true }).eq('telegram_id', targetId);
+                    if (orderCount != null) {
+                        count = orderCount;
+                        userOrdersCount[targetId] = count;
+                    }
+                } catch (e) {}
+            }
 
             let card =
                 `👤 <b>BLESSING.KH CUSTOMER PROFILE</b>\n----------------------------------------\n` +
@@ -2383,7 +2429,7 @@ bot.on('text', async (ctx, next) => {
                 return ctx.replyWithHTML('⚠️ <b>ចំនួនទឹកប្រាក់ធំពេក (លើសពី $100,000 USD)!</b>\nសូមពិនិត្យមើលថា ៖ តើបងច្រឡំបញ្ចូលលេខ User ID ជាចំនួនទឹកប្រាក់ដែរឬទេ? 😃', adminUsersKeyboard);
             }
 
-            const newBal = getBalance(targetId) + amount;
+            const newBal = (await getFreshBalance(targetId)) + amount;
             await dbUpdateBalance(targetId, newBal);
 
             ctx.replyWithHTML(`✅ <b>បានបន្ថែម +$${amount.toFixed(2)} USD ជូនអតិថិជន <code>${targetId}</code> ដោយជោគជ័យ!</b>\n💰 តុល្យភាពថ្មី ៖ <b>$${newBal.toFixed(2)} USD</b>`, adminUsersKeyboard);
@@ -2416,7 +2462,7 @@ bot.on('text', async (ctx, next) => {
                 return ctx.replyWithHTML('⚠️ <b>ចំនួនទឹកប្រាក់ធំពេក (លើសពី $100,000 USD)!</b>\nសូមពិនិត្យមើលថា ៖ តើបងច្រឡំបញ្ចូលលេខ User ID ជាចំនួនទឹកប្រាក់ដែរឬទេ? 😃', adminUsersKeyboard);
             }
 
-            const newBal = Math.max(0, getBalance(targetId) - amount);
+            const newBal = Math.max(0, (await getFreshBalance(targetId)) - amount);
             await dbUpdateBalance(targetId, newBal);
 
             ctx.replyWithHTML(`✅ <b>បានកាត់ប្រាក់ -$${amount.toFixed(2)} USD ពីអតិថិជន <code>${targetId}</code> ដោយជោគជ័យ!</b>\n💰 តុល្យភាពនៅសល់ ៖ <b>$${newBal.toFixed(2)} USD</b>`, adminUsersKeyboard);
@@ -5021,7 +5067,7 @@ bot.action(/^confirm_dep/, async (ctx) => {
 
     if (depositMode !== 'MANUAL' && depositMode !== 'PAYWAY' && (isInstantAutoDepositOn || isBakongVerified || isAcledaVerified)) {
         // Instant 100% Fully Automated Deposit Approval!
-        const currentBal = getBalance(userId);
+        const currentBal = await getFreshBalance(userId);
         const newBal = currentBal + totalCredit;
         await dbUpdateBalance(userId, newBal);
 
@@ -5179,7 +5225,7 @@ bot.action(/^approve_dep/, async (ctx) => {
         } catch (e) {}
     }
 
-    const currentBal = getBalance(targetUserId);
+    const currentBal = await getFreshBalance(targetUserId);
     const newBal = currentBal + totalCredit;
     await dbUpdateBalance(targetUserId, newBal);
 
@@ -5550,7 +5596,7 @@ bot.action(/^cancel_order_/, async (ctx) => {
     }
 
     const refundAmount = targetOrder ? parseFloat(targetOrder.price || 0) : 0;
-    const currentBalance = getBalance(targetUserId);
+    const currentBalance = await getFreshBalance(targetUserId);
     const newBalance = currentBalance + refundAmount;
 
     if (refundAmount > 0) {
@@ -6246,7 +6292,7 @@ http.createServer(async (req, res) => {
                     delete pendingAutoDeposits[depId];
 
                     const userId = item.userId;
-                    const currentBal = getBalance(userId);
+                    const currentBal = await getFreshBalance(userId);
                     const newBal = currentBal + item.totalCredit;
                     await dbUpdateBalance(userId, newBal);
 

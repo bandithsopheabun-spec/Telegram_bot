@@ -777,57 +777,75 @@ let autoPayInterval = null;
 function startAutoPaymentEngine() {
     if (autoPayInterval) return;
     autoPayInterval = setInterval(async () => {
+      try {
         const depKeys = Object.keys(pendingAutoDeposits);
         if (depKeys.length === 0) return;
 
         const now = Date.now();
         for (const depId of depKeys) {
-            const item = pendingAutoDeposits[depId];
+            // This loop auto-credits real money every 60s — an uncaught
+            // exception on any single malformed/unexpected entry here would
+            // otherwise become an unhandled promise rejection (the callback
+            // is async, unawaited by setInterval), crashing the entire
+            // Node process and taking bot polling + all webhooks + the
+            // website down simultaneously along with it. Isolate each
+            // entry so one bad item can never take down the others.
+            try {
+                const item = pendingAutoDeposits[depId];
+                if (!item) continue;
 
-            // Expire pending auto check after 30 minutes
-            if (now - item.createdAt > 30 * 60 * 1000) {
-                delete pendingAutoDeposits[depId];
-                continue;
-            }
+                // Expire pending auto check after 30 minutes
+                if (now - item.createdAt > 30 * 60 * 1000) {
+                    delete pendingAutoDeposits[depId];
+                    continue;
+                }
 
-            // PayWay deposits settle exclusively via the ABA webhook (POST
-            // /payway) — their md5Hash isn't a real KHQR hash and will never
-            // match a Bakong transaction, so checking it here would only
-            // waste the daily Bakong quota for nothing. Leave the entry in
-            // place (the webhook handler still needs to find it) but skip
-            // the check.
-            if (item.mode === 'PAYWAY') continue;
+                // PayWay deposits settle exclusively via the ABA webhook (POST
+                // /payway) — their md5Hash isn't a real KHQR hash and will never
+                // match a Bakong transaction, so checking it here would only
+                // waste the daily Bakong quota for nothing. Leave the entry in
+                // place (the webhook handler still needs to find it) but skip
+                // the check.
+                if (item.mode === 'PAYWAY') continue;
 
-            // khqr.cc (Mode 6) settles exclusively via its own webhook (POST
-            // /khqrcc-webhook) — no pull/inquiry endpoint is wired up yet, so
-            // there's nothing useful this loop can check; same reasoning as
-            // PayWay above.
-            if (item.mode === 'KHQRCC') continue;
+                // khqr.cc (Mode 6) settles exclusively via its own webhook (POST
+                // /khqrcc-webhook) — no pull/inquiry endpoint is wired up yet, so
+                // there's nothing useful this loop can check; same reasoning as
+                // PayWay above.
+                if (item.mode === 'KHQRCC') continue;
 
-            // Wing has its own "Unlimited" rate tier (unlike Bakong's
-            // 100/day) and its own webhook (POST /wing-webhook, the primary
-            // path) — this inquiry call is purely a fallback in case that
-            // webhook is ever missed, so it must never be gated by Bakong's
-            // budget below.
-            if (item.mode === 'WING') {
-                if (await checkWingTransaction(depId)) {
+                // Wing has its own "Unlimited" rate tier (unlike Bakong's
+                // 100/day) and its own webhook (POST /wing-webhook, the primary
+                // path) — this inquiry call is purely a fallback in case that
+                // webhook is ever missed, so it must never be gated by Bakong's
+                // budget below.
+                if (item.mode === 'WING') {
+                    if (await checkWingTransaction(depId)) {
+                        await autoCreditDeposit(depId, item);
+                    }
+                    continue;
+                }
+
+                // BAKONG / ACLEDA (or legacy entries with no mode tag) — gated
+                // by Bakong's daily call budget since checkBakongTransaction is
+                // always attempted here.
+                if (!canCallBakongApi()) continue;
+                bakongApiCallsToday++;
+                const isBakongVerified = await checkBakongTransaction(item.md5Hash);
+                const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, item.amount) : false;
+
+                if (isBakongVerified || isAcledaVerified) {
                     await autoCreditDeposit(depId, item);
                 }
-                continue;
-            }
-
-            // BAKONG / ACLEDA (or legacy entries with no mode tag) — gated
-            // by Bakong's daily call budget since checkBakongTransaction is
-            // always attempted here.
-            if (!canCallBakongApi()) continue;
-            bakongApiCallsToday++;
-            const isBakongVerified = await checkBakongTransaction(item.md5Hash);
-            const isAcledaVerified = isAcledaPaymentOn ? await checkAcledaTransaction(depId, item.amount) : false;
-
-            if (isBakongVerified || isAcledaVerified) {
-                await autoCreditDeposit(depId, item);
+            } catch (loopErr) {
+                console.error(`⚠️ startAutoPaymentEngine: error processing ${depId}:`, loopErr.message);
             }
         }
+      } catch (outerErr) {
+        // Catches anything outside the per-item try above (e.g. a bad
+        // Object.keys() call) — same crash-prevention reasoning.
+        console.error('⚠️ startAutoPaymentEngine: unexpected error:', outerErr.message);
+      }
     }, 60000); // 60s, not 7s — see BAKONG_DAILY_CALL_BUDGET comment above
 }
 
@@ -2159,7 +2177,15 @@ bot.hears(/(.*)=\s*\$?([0-9.]+)/, (ctx, next) => {
     }
 
     const hasAdminPrefix = text.toLowerCase().startsWith('l:') || text.toLowerCase().startsWith('edit:');
-    const isInAdminState = isAdmin(userId) && (state && state.step && state.step.startsWith('AWAITING_ADMIN_'));
+    // SECURITY/CORRECTNESS: was `state.step.startsWith('AWAITING_ADMIN_')` —
+    // matched ANY admin state, not just a real price edit, so pasting a
+    // credential with its label while in an unrelated admin flow (e.g.
+    // "wing_secret=8f92e1c93" during AWAITING_ADMIN_WING_CLIENT_SECRET, or
+    // "khqr_secret=abc123" during AWAITING_ADMIN_KHQRCC_SECRET) got silently
+    // reinterpreted as a package price edit, destroying that credential's
+    // input. AWAITING_ADMIN_EDIT_PRICE_INPUT is the actual, purpose-built
+    // state for this flow — narrow the match to just that.
+    const isInAdminState = isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_EDIT_PRICE_INPUT';
 
     // IF SENDER HAS L: PREFIX OR IS IN ADMIN EDIT STATE: TREAT AS ADMIN EDIT CONFIRMATION!
     if (isAdmin(userId) && (hasAdminPrefix || isInAdminState)) {
@@ -2690,6 +2716,84 @@ bot.on('text', async (ctx, next) => {
 
             return ctx.replyWithHTML(confirmCard, confirmKb);
         }
+
+        // These 5 states must live inside this early AWAITING_ADMIN_ wrapper
+        // too (same reasoning as AWAITING_ADMIN_FIND_USER/TARGETED_BROADCAST_*
+        // above) — they used to sit ~700 lines further down, where a Wing
+        // Client ID (6+ digits) got misidentified as an Order ID by FLOW C,
+        // a khqr.cc secret or broadcast text containing "=" + digits got
+        // misidentified as a package-price edit, and a Howto Link/Broadcast
+        // could get silently swallowed by the keyword-bypass check — all
+        // before ever reaching the real handler below. Confirmed live via
+        // this exact bug shape for Find User/Targeted Broadcast earlier.
+        if (state.step === 'AWAITING_ADMIN_WING_CLIENT_ID') {
+            wingClientId = text.trim();
+            userState[userId] = { step: 'AWAITING_ADMIN_WING_CLIENT_SECRET' };
+            return ctx.replyWithHTML(
+                `✅ <b>បានរក្សាទុក Wing Client ID រួចរាល់!</b>\n\n` +
+                `✍️ <b>ជំហានទី ២៖</b> សូមផ្ញើ <b>Wing Client Secret</b> ថែមមួយទៀត ៖`,
+                Markup.keyboard([['🔐 Admin Menu']]).resize()
+            );
+        }
+
+        if (state.step === 'AWAITING_ADMIN_WING_CLIENT_SECRET') {
+            wingClientSecret = text.trim();
+            wingTokenCache = { accessToken: null, expiresAt: 0 }; // force a fresh token with the new credentials
+            delete userState[userId];
+            return ctx.replyWithHTML(
+                `✅ <b>បានរក្សាទុក Wing Client ID + Secret ដោយជោគជ័យ!</b>\n\n` +
+                `⚠️ <i>Credentials នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variables ` +
+                `<code>WING_CLIENT_ID</code> និង <code>WING_CLIENT_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>`,
+                getAdminSettingsKeyboard()
+            );
+        }
+
+        if (state.step === 'AWAITING_ADMIN_KHQRCC_SECRET') {
+            khqrCcSecret = text.trim();
+            delete userState[userId];
+            return ctx.replyWithHTML(
+                `✅ <b>បានរក្សាទុក khqr.cc Secret Key ដោយជោគជ័យ!</b>\n\n` +
+                `⚠️ <i>Secret Key នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variable ` +
+                `<code>KHQR_CC_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>\n\n` +
+                `📌 <i>កុំភ្លេចកំណត់ Global Webhook URL ក្នុង khqr.cc Dashboard ទៅជា <code>${(process.env.WEB_APP_URL || 'https://your-domain.com')}/khqrcc-webhook</code> ផងដែរ!</i>`,
+                getAdminSettingsKeyboard()
+            );
+        }
+
+        if (state.step === 'AWAITING_ADMIN_HOWTO_LINK') {
+            delete userState[userId];
+            const cleanUrl = text.trim();
+            howtoVideoLinks = [cleanUrl, cleanUrl, cleanUrl];
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែ How-to Video Link ថ្មីជោគជ័យ ៖</b>\n<code>${howtoVideoLinks[0]}</code>`, adminToolsKeyboard);
+        }
+
+        if (state.step === 'AWAITING_ADMIN_BROADCAST') {
+            delete userState[userId];
+            const msgId = ctx.message.message_id;
+            const fromChatId = ctx.chat.id;
+
+            const usersList = await getAllBroadcastUsers();
+
+            const previewPrompt =
+                `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Broadcast Message Preview) ៖</b>\n` +
+                `----------------------------------------\n` +
+                `📊 <b>ចំនួនអតិថិជនរង់ចាំទទួលសារ ៖</b> <b>${usersList.length} Users</b>\n\n` +
+                `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ ]</b> ខាងក្រោម ៖</i>`;
+
+            const bcastKb = Markup.inlineKeyboard([
+                [Markup.button.callback('🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ (Send Broadcast)', `send_bcast_${msgId}`)],
+                [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_bcast')]
+            ]);
+
+            await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
+
+            try {
+                await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
+            } catch (e) {
+                await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
+            }
+            return;
+        }
     }
 
     // FLOW: PAYWAY DIRECT PAID AMOUNT INPUT VERIFICATION
@@ -2788,14 +2892,20 @@ bot.on('text', async (ctx, next) => {
                 );
             }
 
-            // Search Supabase DB
+            // Search Supabase DB — scoped to the requester's OWN orders
+            // unless they're Admin. Without this, any customer who knew or
+            // guessed another customer's Order ID could see that customer's
+            // target link, price, and status here.
             if (!foundOrder && supabase) {
                 try {
-                    const { data } = await supabase
+                    let query = supabase
                         .from('orders')
                         .select('*')
-                        .or(`order_id.ilike.%${rawNum || searchPattern}%,order_id.ilike.%${searchPattern.replace('#', '')}%`)
-                        .maybeSingle();
+                        .or(`order_id.ilike.%${rawNum || searchPattern}%,order_id.ilike.%${searchPattern.replace('#', '')}%`);
+                    if (!isAdmin(userId)) {
+                        query = query.eq('telegram_id', userId);
+                    }
+                    const { data } = await query.maybeSingle();
                     foundOrder = data;
                 } catch (e) {}
             }
@@ -3294,75 +3404,6 @@ bot.on('text', async (ctx, next) => {
         delete userState[userId];
         const masked = `${newToken.slice(0, 8)}...${newToken.slice(-6)}`;
         return ctx.replyWithHTML(`✅ <b>បានរក្សាទុក ACLEDA API Token (<code>${masked}</code>) និង បើកដំណើការ ACLEDA Auto-Pay ដោយជោគជ័យ!</b>`, getAdminSettingsKeyboard());
-    }
-
-    if (state.step === 'AWAITING_ADMIN_WING_CLIENT_ID') {
-        wingClientId = text.trim();
-        userState[userId] = { step: 'AWAITING_ADMIN_WING_CLIENT_SECRET' };
-        return ctx.replyWithHTML(
-            `✅ <b>បានរក្សាទុក Wing Client ID រួចរាល់!</b>\n\n` +
-            `✍️ <b>ជំហានទី ២៖</b> សូមផ្ញើ <b>Wing Client Secret</b> ថែមមួយទៀត ៖`,
-            Markup.keyboard([['🔐 Admin Menu']]).resize()
-        );
-    }
-
-    if (state.step === 'AWAITING_ADMIN_WING_CLIENT_SECRET') {
-        wingClientSecret = text.trim();
-        wingTokenCache = { accessToken: null, expiresAt: 0 }; // force a fresh token with the new credentials
-        delete userState[userId];
-        return ctx.replyWithHTML(
-            `✅ <b>បានរក្សាទុក Wing Client ID + Secret ដោយជោគជ័យ!</b>\n\n` +
-            `⚠️ <i>Credentials នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variables ` +
-            `<code>WING_CLIENT_ID</code> និង <code>WING_CLIENT_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>`,
-            getAdminSettingsKeyboard()
-        );
-    }
-
-    if (state.step === 'AWAITING_ADMIN_KHQRCC_SECRET') {
-        khqrCcSecret = text.trim();
-        delete userState[userId];
-        return ctx.replyWithHTML(
-            `✅ <b>បានរក្សាទុក khqr.cc Secret Key ដោយជោគជ័យ!</b>\n\n` +
-            `⚠️ <i>Secret Key នេះរក្សាទុកតែក្នុង Memory ប៉ុណ្ណោះ — នឹងបាត់ពេល Redeploy។ សូមកំណត់ Environment Variable ` +
-            `<code>KHQR_CC_SECRET</code> ក្នុង Render ផងដែរ ដើម្បីរក្សាទុកអចិន្ត្រៃយ៍។</i>\n\n` +
-            `📌 <i>កុំភ្លេចកំណត់ Global Webhook URL ក្នុង khqr.cc Dashboard ទៅជា <code>${(process.env.WEB_APP_URL || 'https://your-domain.com')}/khqrcc-webhook</code> ផងដែរ!</i>`,
-            getAdminSettingsKeyboard()
-        );
-    }
-
-    if (state.step === 'AWAITING_ADMIN_HOWTO_LINK') {
-        delete userState[userId];
-        const cleanUrl = text.trim();
-        howtoVideoLinks = [cleanUrl, cleanUrl, cleanUrl];
-        return ctx.replyWithHTML(`✅ <b>បានកែប្រែ How-to Video Link ថ្មីជោគជ័យ ៖</b>\n<code>${howtoVideoLinks[0]}</code>`, adminToolsKeyboard);
-    }
-
-    if (state.step === 'AWAITING_ADMIN_BROADCAST') {
-        delete userState[userId];
-        const msgId = ctx.message.message_id;
-        const fromChatId = ctx.chat.id;
-
-        const usersList = await getAllBroadcastUsers();
-
-        const previewPrompt = 
-            `👁️ <b>មើលគំរូសារប្រកាសជាមុន (Broadcast Message Preview) ៖</b>\n` +
-            `----------------------------------------\n` +
-            `📊 <b>ចំនួនអតិថិជនរង់ចាំទទួលសារ ៖</b> <b>${usersList.length} Users</b>\n\n` +
-            `👉 <i>សូមពិនិត្យគំរូសារខាងក្រោម ៖ ប្រសិនបើត្រឹមត្រូវ សូមចុចប៊ូតុង <b>[ 🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ ]</b> ខាងក្រោម ៖</i>`;
-
-        const bcastKb = Markup.inlineKeyboard([
-            [Markup.button.callback('🚀 ផ្ញើទៅកាន់អតិថិជនទាំងអស់ (Send Broadcast)', `send_bcast_${msgId}`)],
-            [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_bcast')]
-        ]);
-
-        await ctx.replyWithHTML(previewPrompt, adminToolsKeyboard);
-
-        try {
-            await ctx.telegram.copyMessage(fromChatId, fromChatId, msgId, { reply_markup: bcastKb.reply_markup });
-        } catch (e) {
-            await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', bcastKb);
-        }
-        return;
     }
 
     // Unhandled Link Catch (Strict Separation between Admin Links & Customer Order Links)
@@ -5440,13 +5481,41 @@ bot.action(/^done_order_/, async (ctx) => {
     const adminName = ctx.from.first_name || 'Admin';
 
     // Anti-double-click protection — also prevents an order being marked Done
-    // after it was already Cancel/Refund'd (or vice versa).
+    // after it was already Cancel/Refund'd (or vice versa). Only a
+    // single-process, in-memory guard, so it's wiped on every restart.
     if (processedOrderActions.has(fullOrderId)) {
         try {
             return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
         } catch (e) { return; }
     }
     processedOrderActions.add(fullOrderId);
+
+    // Database-level compare-and-swap as a second, independent guard against
+    // marking (or refunding) the same order twice — the in-memory Set above
+    // only protects a single running process; this update only succeeds
+    // (and returns a row) if the order's Supabase status is not already a
+    // terminal one, so a stale button surviving a redeploy, a duplicate
+    // Problem-Solve ticket, or a second admin acting on the same order can
+    // never resolve it (and refund/complete it) twice. Same pattern already
+    // used for deposits (approve_dep/reject_dep).
+    let targetOrder = null;
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .update({ status: 'Completed' })
+                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
+                .neq('status', 'Completed')
+                .neq('status', 'Canceled & Refunded')
+                .select();
+            if (!data || data.length === 0) {
+                try {
+                    return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
+                } catch (e) { return; }
+            }
+            targetOrder = data[0];
+        } catch (e) {}
+    }
 
     // If Admin is resolving this straight from its Problem-Solve ticket
     // (escalated earlier via "❓ Other Reason"), delete that ticket message
@@ -5470,26 +5539,6 @@ bot.action(/^done_order_/, async (ctx) => {
         try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
     }
     await resolveProblemTicket(fullOrderId, 'Resolved (Done)');
-
-    // 1. Update status in Supabase DB
-    let targetOrder = null;
-    if (supabase) {
-        try {
-            const { data } = await supabase
-                .from('orders')
-                .select('*')
-                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
-                .maybeSingle();
-            targetOrder = data;
-
-            if (targetOrder) {
-                await supabase
-                    .from('orders')
-                    .update({ status: 'Completed' })
-                    .eq('id', targetOrder.id);
-            }
-        } catch (e) {}
-    }
 
     // Update memory cache
     if (userOrdersCache[targetUserId]) {
@@ -5572,12 +5621,37 @@ bot.action(/^cancel_order_/, async (ctx) => {
 
     // Anti-double-click protection — also prevents a refund after the order
     // was already marked Done (or a double refund from clicking twice).
+    // Only a single-process, in-memory guard, so it's wiped on every restart.
     if (processedOrderActions.has(fullOrderId)) {
         try {
             return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
         } catch (e) { return; }
     }
     processedOrderActions.add(fullOrderId);
+
+    // Database-level compare-and-swap as a second, independent guard against
+    // refunding (or completing) the same order twice — see the matching
+    // comment in done_order_ above. Critical here specifically: without it,
+    // a stale button surviving a redeploy could refund a customer's balance
+    // a second time with no backstop to catch it.
+    let targetOrder = null;
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .update({ status: 'Canceled & Refunded' })
+                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
+                .neq('status', 'Completed')
+                .neq('status', 'Canceled & Refunded')
+                .select();
+            if (!data || data.length === 0) {
+                try {
+                    return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
+                } catch (e) { return; }
+            }
+            targetOrder = data[0];
+        } catch (e) {}
+    }
 
     // If Admin is resolving this straight from its Problem-Solve ticket
     // (escalated earlier via "❓ Other Reason"), delete that ticket message
@@ -5601,26 +5675,6 @@ bot.action(/^cancel_order_/, async (ctx) => {
         try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
     }
     await resolveProblemTicket(fullOrderId, 'Resolved (Cancel/Refund)');
-
-    let targetOrder = null;
-
-    if (supabase) {
-        try {
-            const { data } = await supabase
-                .from('orders')
-                .select('*')
-                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
-                .maybeSingle();
-            targetOrder = data;
-
-            if (targetOrder) {
-                await supabase
-                    .from('orders')
-                    .update({ status: 'Canceled & Refunded' })
-                    .eq('id', targetOrder.id);
-            }
-        } catch (e) {}
-    }
 
     if (userOrdersCache[targetUserId]) {
         const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(rawOrderId.replace('#', '')));

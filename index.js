@@ -2417,7 +2417,17 @@ bot.on('text', async (ctx, next) => {
                 } catch (e) {}
             }
 
-            return ctx.replyWithHTML(card, adminUsersKeyboard);
+            await ctx.replyWithHTML(card, adminUsersKeyboard);
+
+            // Lets Admin ping this customer with their current balance —
+            // e.g. reminding someone who topped up but never ordered, or
+            // confirming a manual credit landed. Sent as a separate message
+            // since Telegram can't combine an inline keyboard with the
+            // reply keyboard the card above already uses.
+            const notifyBalanceKb = Markup.inlineKeyboard([
+                [Markup.button.callback('💬 ជូនដំណឹងសមតុល្យទៅភ្ញៀវ', `notify_balance_${targetId}`)]
+            ]);
+            return ctx.replyWithHTML('👇 <i>ចុចខាងក្រោមដើម្បីជូនដំណឹងសមតុល្យទៅភ្ញៀវនេះ ៖</i>', notifyBalanceKb);
         }
 
         // Must live inside this early AWAITING_ADMIN_ wrapper, not the later
@@ -5948,6 +5958,34 @@ bot.action(/^reason_custom_/, async (ctx) => {
 bot.action('reason_close', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch (e) {}
     try { await ctx.editMessageText('❌ បានបិទ។'); } catch (e) {}
+});
+
+// Admin clicks [ 💬 ជូនដំណឹងសមតុល្យទៅភ្ញៀវ ] on the Find User card — DMs
+// that customer their current wallet balance, e.g. as a nudge to place an
+// order with funds they've already topped up.
+bot.action(/^notify_balance_(\d+)$/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (!isAdmin(adminId)) {
+        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
+    }
+
+    const targetId = parseInt(ctx.match[1]);
+    const bal = await getFreshBalance(targetId);
+    const userLangCode = getLang(targetId);
+
+    const msg = userLangCode === 'en' ?
+        `💰 <b>Wallet Balance Reminder</b>\n----------------------------------------\n` +
+        `Your current balance is <b>$${bal.toFixed(2)} USD</b> — ready to use for your next order! 🛒` :
+        `💰 <b>ជូនដំណឹងអំពីសមតុល្យកាបូបលុយ</b>\n----------------------------------------\n` +
+        `សមតុល្យបច្ចុប្បន្នរបស់អ្នកគឺ <b>$${bal.toFixed(2)} USD</b> — អាចប្រើសម្រាប់ការបញ្ជាទិញលើកក្រោយបានហើយ! 🛒`;
+
+    try {
+        await bot.telegram.sendMessage(targetId, msg, { parse_mode: 'HTML', ...getMainKeyboard(userLangCode) });
+        try { await ctx.answerCbQuery('✅ បានផ្ញើសារជូនដំណឹងទៅភ្ញៀវរួចរាល់!'); } catch (e) {}
+        try { await ctx.editMessageText(`✅ <b>បានផ្ញើសារជូនដំណឹងសមតុល្យ ($${bal.toFixed(2)} USD) ទៅ User <code>${targetId}</code> រួចរាល់!</b>`, { parse_mode: 'HTML' }); } catch (e) {}
+    } catch (e) {
+        try { await ctx.answerCbQuery('❌ មិនអាចផ្ញើសារបាន (User ប្រហែលជាបានទប់ស្កាត់ Bot)', { show_alert: true }); } catch (err) {}
+    }
 });
 
 // ADMIN COMMAND: /setstatus <ORDER_ID> <STATUS> (e.g. /setstatus ORD-749927 Completed)

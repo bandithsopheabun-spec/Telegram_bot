@@ -1362,13 +1362,26 @@ async function resolveProblemTicket(fullOrderId, resolutionStatus) {
 // order status beyond setting it back to 'Processing' — Admin still
 // verifies and finishes it manually, since a customer's own claim that
 // something is fixed isn't proof.
+//
+// Returns { alreadyResolved: true } and does nothing else if the order was
+// already Done/Cancel-Refunded (e.g. a stale "✅ I've done it" button
+// pressed again after a restart wiped processedOrderActions, or a
+// double-tap) — without this DB-level compare-and-swap (same pattern
+// done_order_/cancel_order_ use), a second press could silently flip a
+// terminal order back to 'Processing' and let it be refunded a second time.
 async function reactivateOrderForReview(fullOrderId, targetUserId, adminMsgHtml) {
     if (supabase) {
         try {
-            await supabase
+            const { data } = await supabase
                 .from('orders')
                 .update({ status: 'Processing' })
-                .or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`);
+                .or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`)
+                .neq('status', 'Completed')
+                .neq('status', 'Canceled & Refunded')
+                .select();
+            if (!data || data.length === 0) {
+                return { alreadyResolved: true };
+            }
         } catch (e) {}
     }
     if (userOrdersCache[targetUserId]) {
@@ -1379,6 +1392,18 @@ async function reactivateOrderForReview(fullOrderId, targetUserId, adminMsgHtml)
     if (problemTickets[fullOrderId]) {
         try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
         delete problemTickets[fullOrderId];
+    }
+
+    // Clear any still-live card this order already has (the original
+    // Purchase Order Group card if the move-to-ticket never happened, or an
+    // earlier reactivation) before posting a new one — otherwise two
+    // messages end up with working Done/Cancel/Other Reason buttons for the
+    // same order at once.
+    if (orderNotifyMessages[fullOrderId]) {
+        const staleRef = orderNotifyMessages[fullOrderId];
+        try {
+            await bot.telegram.editMessageReplyMarkup(staleRef.chatId, staleRef.messageId, undefined, { inline_keyboard: [] });
+        } catch (e) {}
     }
 
     const cleanOrderId = fullOrderId.replace('#', '');
@@ -1392,6 +1417,8 @@ async function reactivateOrderForReview(fullOrderId, targetUserId, adminMsgHtml)
         const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsgHtml, { parse_mode: 'HTML', ...reviewKb });
         orderNotifyMessages[fullOrderId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
     } catch (e) {}
+
+    return { alreadyResolved: false };
 }
 
 // ==========================================
@@ -3029,8 +3056,16 @@ bot.on('text', async (ctx, next) => {
     }
 
     // FLOW C: ORDER ID LOOKUP (e.g. #ORD-419873, ORD-419873, or AWAITING_CHECK_ORDER)
-    const isCheckOrderState = state && state.step === 'AWAITING_CHECK_ORDER';
-    const isOrderCodeFormat = text.toUpperCase().includes('ORD') || (/^\d+$/.test(text) && text.length >= 6);
+    // Must NOT run while AWAITING_REPLACEMENT_LINK — a customer who pastes
+    // just a bare numeric TikTok video ID (no http/tiktok.com, a common
+    // mistake) instead of the full link would otherwise match
+    // isOrderCodeFormat's "6+ digit string" rule below, silently wiping
+    // their AWAITING_REPLACEMENT_LINK state and replying "ORDER NOT FOUND"
+    // instead of re-prompting for a valid link (same interception bug
+    // pattern already fixed for several AWAITING_ADMIN_ states this session).
+    const isReplacementLinkStep = state && state.step === 'AWAITING_REPLACEMENT_LINK';
+    const isCheckOrderState = !isReplacementLinkStep && state && state.step === 'AWAITING_CHECK_ORDER';
+    const isOrderCodeFormat = !isReplacementLinkStep && (text.toUpperCase().includes('ORD') || (/^\d+$/.test(text) && text.length >= 6));
 
     if (isCheckOrderState || isOrderCodeFormat) {
         if (!text.includes('/') && !text.toLowerCase().includes('http')) {
@@ -3547,27 +3582,6 @@ bot.on('text', async (ctx, next) => {
         const newLink = text;
         delete userState[userId];
 
-        if (supabase) {
-            try {
-                await supabase
-                    .from('orders')
-                    .update({ target_link: newLink, status: 'Processing' })
-                    .or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`);
-            } catch (e) {}
-        }
-        if (userOrdersCache[userId]) {
-            const item = userOrdersCache[userId].find(o => o.order_id.includes(fullOrderId.replace('#', '')));
-            if (item) {
-                item.target_link = newLink;
-                item.status = 'Processing';
-            }
-        }
-
-        const confirmMsg = lang === 'km' ?
-            `✅ <b>បានទទួល Link ថ្មីសម្រាប់ Order ${fullOrderId} រួចរាល់!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin នឹងបន្តដំណើរការជូនអ្នកឆាប់ៗនេះ។` :
-            `✅ <b>New link received for Order ${fullOrderId}!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin will continue processing your order shortly.`;
-        await ctx.replyWithHTML(confirmMsg, getMainKeyboard(lang));
-
         const adminMsg =
             `🔄 <b>ភ្ញៀវបានផ្ញើ Link ថ្មី (Order ${fullOrderId})</b>\n` +
             `----------------------------------------\n` +
@@ -3575,8 +3589,32 @@ bot.on('text', async (ctx, next) => {
             `📦 <b>Package:</b> ${packageName}\n` +
             `🔗 <b>Link ថ្មី:</b> ${newLink}\n` +
             `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
-        await reactivateOrderForReview(fullOrderId, userId, adminMsg);
-        return;
+        const result = await reactivateOrderForReview(fullOrderId, userId, adminMsg);
+
+        if (result && result.alreadyResolved) {
+            const doneMsg = lang === 'km' ?
+                `ℹ️ <b>Order ${fullOrderId} ត្រូវបានសម្រេចរួចរាល់ហើយ។</b>\nសូមទាក់ទង Admin Support ប្រសិនបើមានចម្ងល់។` :
+                `ℹ️ <b>Order ${fullOrderId} has already been resolved.</b>\nPlease contact Admin Support if you have questions.`;
+            return ctx.replyWithHTML(doneMsg, getMainKeyboard(lang));
+        }
+
+        // Only update the link once we know the order is still active —
+        // rewriting target_link on an already-Completed/Refunded order
+        // (caught above) isn't meaningful.
+        if (supabase) {
+            try {
+                await supabase.from('orders').update({ target_link: newLink }).or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`);
+            } catch (e) {}
+        }
+        if (userOrdersCache[userId]) {
+            const item = userOrdersCache[userId].find(o => o.order_id.includes(fullOrderId.replace('#', '')));
+            if (item) item.target_link = newLink;
+        }
+
+        const confirmMsg = lang === 'km' ?
+            `✅ <b>បានទទួល Link ថ្មីសម្រាប់ Order ${fullOrderId} រួចរាល់!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin នឹងបន្តដំណើរការជូនអ្នកឆាប់ៗនេះ។` :
+            `✅ <b>New link received for Order ${fullOrderId}!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin will continue processing your order shortly.`;
+        return ctx.replyWithHTML(confirmMsg, getMainKeyboard(lang));
     }
 
     // ADMIN STEPS IN TEXT INPUT
@@ -6064,11 +6102,12 @@ bot.action(/^private_fixed_/, async (ctx) => {
 
     const { packageName } = await lookupOrderInfo(rawOrderId, targetUserId);
 
-    const confirmMsg = lang === 'en' ?
-        `✅ <b>Thanks! We'll re-check Order ${fullOrderId} shortly.</b>` :
-        `✅ <b>អរគុណ! យើងនឹងឆែកមើល Order ${fullOrderId} ជាថ្មីម្តងទៀតឆាប់ៗនេះ។</b>`;
-    try { await ctx.answerCbQuery('✅ បានជូនដំណឹង Admin!'); } catch (e) {}
-    try { await ctx.editMessageCaption(confirmMsg, { parse_mode: 'HTML' }); } catch (e) {}
+    // Clear the button immediately (before reactivating) so a double-tap or
+    // a stale press after the order is already resolved can't fire this
+    // handler twice — reactivateOrderForReview's own DB-level guard below
+    // is the real backstop, but disabling the button avoids a confusing
+    // "success" toast on a press that quietly did nothing.
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
 
     const adminMsg =
         `🔄 <b>ភ្ញៀវបញ្ជាក់ថាបានធ្វើ Account/Link ជា Public (Order ${fullOrderId})</b>\n` +
@@ -6077,7 +6116,22 @@ bot.action(/^private_fixed_/, async (ctx) => {
         `📦 <b>Package:</b> ${packageName}\n` +
         `💡 <i>សូមឆែកឡើងវិញថាត្រឹមត្រូវមុននឹងចុច Done។</i>\n` +
         `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
-    await reactivateOrderForReview(fullOrderId, targetUserId, adminMsg);
+    const result = await reactivateOrderForReview(fullOrderId, targetUserId, adminMsg);
+
+    if (result && result.alreadyResolved) {
+        const doneMsg = lang === 'en' ?
+            `ℹ️ Order ${fullOrderId} has already been resolved.` :
+            `ℹ️ Order ${fullOrderId} ត្រូវបានសម្រេចរួចរាល់ហើយ។`;
+        try { await ctx.answerCbQuery(doneMsg, { show_alert: true }); } catch (e) {}
+        try { await ctx.editMessageCaption(doneMsg, { parse_mode: 'HTML' }); } catch (e) {}
+        return;
+    }
+
+    const confirmMsg = lang === 'en' ?
+        `✅ <b>Thanks! We'll re-check Order ${fullOrderId} shortly.</b>` :
+        `✅ <b>អរគុណ! យើងនឹងឆែកមើល Order ${fullOrderId} ជាថ្មីម្តងទៀតឆាប់ៗនេះ។</b>`;
+    try { await ctx.answerCbQuery('✅ បានជូនដំណឹង Admin!'); } catch (e) {}
+    try { await ctx.editMessageCaption(confirmMsg, { parse_mode: 'HTML' }); } catch (e) {}
 });
 
 // Custom reason: prompts Admin to type free text, then forwards it verbatim.

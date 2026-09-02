@@ -1108,7 +1108,12 @@ const PRESET_ORDER_REASONS = {
     private: {
         emoji: '🔒',
         km: 'Link/គណនីជា Private (មិនអាចមើលឃើញ)',
-        en: 'Link/account is set to Private (not viewable)'
+        en: 'Link/account is set to Private (not viewable)',
+        // Sends the standard reason message PLUS a tutorial video (see
+        // privacyTutorialVideoId / "🔒 · Privacy Tutorial Video" in Tools &
+        // System) walking the customer through making their account/video
+        // public, with a button they tap once done.
+        requiresPrivacyVideo: true
     },
     wronglink: {
         emoji: '🔗',
@@ -1197,6 +1202,34 @@ async function requestReplacementLink(targetUserId, fullOrderId, packageName, re
     try {
         await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML', ...supportKb });
     } catch (e) {}
+}
+
+// Sent alongside notifyCustomerOrderReason for presets with
+// requiresPrivacyVideo: true (currently only "🔒 Private") — walks the
+// customer through making their account/video public/promotable via an
+// admin-uploaded tutorial video (see privacyTutorialVideoId /
+// "🔒 · Privacy Tutorial Video" in Tools & System), with a button they tap
+// once done so Admin gets notified to re-check and continue the order.
+async function sendPrivacyTutorial(targetUserId, fullOrderId) {
+    if (!privacyTutorialVideoId) {
+        console.error('⚠️ privacyTutorialVideoId not set — run "🔒 · Privacy Tutorial Video" in Admin > Tools & System. Tutorial not sent for', fullOrderId);
+        return;
+    }
+
+    const userLangCode = getLang(targetUserId);
+    const caption = userLangCode === 'en' ?
+        `🎬 <b>Watch this to fix it, then tap the button below:</b>` :
+        `🎬 <b>មើលវីដេអូនេះដើម្បីដោះស្រាយ រួចចុចប៊ូតុងខាងក្រោម ៖</b>`;
+    const cleanOrderId = fullOrderId.replace('#', '');
+    const doneKb = Markup.inlineKeyboard([
+        [Markup.button.callback(userLangCode === 'en' ? '✅ Done — I made it public' : '✅ ខ្ញុំបានធ្វើរួចរាល់', `private_fixed_${cleanOrderId}_${targetUserId}`)]
+    ]);
+
+    try {
+        await bot.telegram.sendVideo(targetUserId, privacyTutorialVideoId, { caption, parse_mode: 'HTML', ...doneKb });
+    } catch (e) {
+        console.error('⚠️ Could not send Privacy Tutorial Video:', e.message);
+    }
 }
 
 // In-memory tracking of the currently-open Problem-Solve ticket message per
@@ -1305,6 +1338,47 @@ async function resolveProblemTicket(fullOrderId, resolutionStatus) {
                 .eq('status', 'Open');
         } catch (e) {}
     }
+}
+
+// Puts an escalated order back in front of Admin after the CUSTOMER takes
+// some corrective action — submitting a new link, confirming they've made
+// their account/video public, etc. Closes out any stale Problem-Solve
+// ticket (it was about the problem that's now supposedly fixed) and posts
+// a fresh card with Done/Cancel/Other Reason buttons to Purchase Order
+// Group, becoming the order's new live tracking point. Does NOT touch
+// order status beyond setting it back to 'Processing' — Admin still
+// verifies and finishes it manually, since a customer's own claim that
+// something is fixed isn't proof.
+async function reactivateOrderForReview(fullOrderId, targetUserId, adminMsgHtml) {
+    if (supabase) {
+        try {
+            await supabase
+                .from('orders')
+                .update({ status: 'Processing' })
+                .or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`);
+        } catch (e) {}
+    }
+    if (userOrdersCache[targetUserId]) {
+        const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(fullOrderId.replace('#', '')));
+        if (item) item.status = 'Processing';
+    }
+
+    if (problemTickets[fullOrderId]) {
+        try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
+        delete problemTickets[fullOrderId];
+    }
+
+    const cleanOrderId = fullOrderId.replace('#', '');
+    const reviewKb = Markup.inlineKeyboard([
+        [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${targetUserId}`)],
+        [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${targetUserId}`)],
+        [Markup.button.callback('❓ មូលហេតុផ្សេង (Other Reason)', `other_order_${cleanOrderId}_${targetUserId}`)]
+    ]);
+
+    try {
+        const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsgHtml, { parse_mode: 'HTML', ...reviewKb });
+        orderNotifyMessages[fullOrderId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
+    } catch (e) {}
 }
 
 // ==========================================
@@ -1501,20 +1575,39 @@ function loadMediaConfig() {
                 customHowToOrderVideoId = parsed.videoId;
                 console.log('✅ Loaded customHowToOrderVideoId from media_config.json:', customHowToOrderVideoId);
             }
+            if (parsed && parsed.privacyTutorialVideoId) {
+                privacyTutorialVideoId = parsed.privacyTutorialVideoId;
+                console.log('✅ Loaded privacyTutorialVideoId from media_config.json:', privacyTutorialVideoId);
+            }
         }
     } catch (e) {
         console.error('⚠️ Could not load media_config.json:', e.message);
     }
 }
 
-function saveMediaConfig(fileId) {
+// Shared write path for both video slots this file holds — writing only
+// one field (the old behavior) would silently wipe out the other slot's
+// value, since both live in the same JSON file.
+function writeMediaConfigToDisk() {
+    const payload = { videoId: customHowToOrderVideoId, privacyTutorialVideoId };
     try {
-        fs.writeFileSync(MEDIA_FILE, JSON.stringify({ videoId: fileId }, null, 2), 'utf8');
-        console.log('✅ Saved customHowToOrderVideoId to media_config.json:', fileId);
+        fs.writeFileSync(MEDIA_FILE, JSON.stringify(payload, null, 2), 'utf8');
     } catch (e) {
         console.error('⚠️ Could not save media_config.json:', e.message);
     }
-    saveJsonConfigToSupabase('media_config', JSON.stringify({ videoId: fileId }));
+    saveJsonConfigToSupabase('media_config', JSON.stringify(payload));
+}
+
+function saveMediaConfig(fileId) {
+    customHowToOrderVideoId = fileId;
+    console.log('✅ Saved customHowToOrderVideoId to media_config.json:', fileId);
+    writeMediaConfigToDisk();
+}
+
+function savePrivacyTutorialVideoConfig(fileId) {
+    privacyTutorialVideoId = fileId;
+    console.log('✅ Saved privacyTutorialVideoId to media_config.json:', fileId);
+    writeMediaConfigToDisk();
 }
 
 // Extra admins added at runtime via the bot's "Manage Admins" menu (persisted
@@ -3462,25 +3555,6 @@ bot.on('text', async (ctx, next) => {
             `✅ <b>New link received for Order ${fullOrderId}!</b>\n🔗 <code>${newLink}</code>\n\n⚡ Admin will continue processing your order shortly.`;
         await ctx.replyWithHTML(confirmMsg, getMainKeyboard(lang));
 
-        // The old Problem-Solve ticket (if any) was about the link that's
-        // now been replaced — it's stale, so close it out rather than
-        // leaving two live places (that old ticket + this new card) both
-        // claiming to be the actionable one for the same order.
-        if (problemTickets[fullOrderId]) {
-            try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
-            delete problemTickets[fullOrderId];
-        }
-
-        // Full action buttons (not just a plain notice) — the new link isn't
-        // guaranteed correct either, so Admin needs Done/Cancel/Other Reason
-        // available immediately, same as the original order card.
-        const cleanOrderId = fullOrderId.replace('#', '');
-        const newLinkKb = Markup.inlineKeyboard([
-            [Markup.button.callback('✅ ចុចបញ្ចប់ការទិញ (Done)', `done_order_${cleanOrderId}_${userId}`)],
-            [Markup.button.callback('❌ បោះបង់ & វេរលុយសង (Cancel/Refund)', `cancel_order_${cleanOrderId}_${userId}`)],
-            [Markup.button.callback('❓ មូលហេតុផ្សេង (Other Reason)', `other_order_${cleanOrderId}_${userId}`)]
-        ]);
-
         const adminMsg =
             `🔄 <b>ភ្ញៀវបានផ្ញើ Link ថ្មី (Order ${fullOrderId})</b>\n` +
             `----------------------------------------\n` +
@@ -3488,13 +3562,7 @@ bot.on('text', async (ctx, next) => {
             `📦 <b>Package:</b> ${packageName}\n` +
             `🔗 <b>Link ថ្មី:</b> ${newLink}\n` +
             `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
-        try {
-            const sentMsg = await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, adminMsg, { parse_mode: 'HTML', ...newLinkKb });
-            // This message is now the order's live "card" — Other Reason /
-            // Done / Cancel acting on it should edit/move THIS message going
-            // forward, not the old (already superseded) one.
-            orderNotifyMessages[fullOrderId] = { chatId: TARGET_ADMIN_CHAT_ID, messageId: sentMsg.message_id };
-        } catch (e) {}
+        await reactivateOrderForReview(fullOrderId, userId, adminMsg);
         return;
     }
 
@@ -3902,6 +3970,20 @@ bot.on(['video', 'document'], (ctx) => {
             );
         }
 
+        // Must be checked BEFORE the "any admin video auto-captures as
+        // how-to-order" fallback below, or a Privacy Tutorial Video upload
+        // would get misfiled as the how-to-order video instead.
+        if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_PRIVACY_VIDEO') {
+            delete userState[userId];
+            savePrivacyTutorialVideoConfig(fileId);
+            return ctx.replyWithHTML(
+                `✅ <b>បានផ្លាស់ប្តូរ និង រក្សាទុកវីដេអូណែនាំដោះស្រាយបញ្ហា Private ជោគជ័យ 100%!</b>\n----------------------------------------\n\n` +
+                `🎬 <b>Video File ID ៖</b> <code>${fileId}</code>\n\n` +
+                `✨ <i>ភ្ញៀវនឹងទទួលបានវីដេអូនេះដោយស្វ័យប្រវត្តិ ពេល Admin ចុចមូលហេតុ "🔒 Private" លើ Order ណាមួយ!</i>`,
+                adminToolsKeyboard
+            );
+        }
+
         if (isAdmin(userId) && isVideo) {
             customHowToOrderVideoId = fileId;
             saveMediaConfig(fileId);
@@ -4165,6 +4247,7 @@ let isInstantAutoDepositOn = true; // Mode 3: ABA PayWay Merchant Auto-Payment
 let depositMode = 'MANUAL'; // Default: Mode 1 - Manual Admin Approval ('MANUAL')
 let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
+let privacyTutorialVideoId = null; // Custom uploaded "make your account/link public" tutorial video file ID — sent alongside the "🔒 Private" Other Reason preset
 const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
 const processedOrderActions = new Set(); // Prevents an order being Done AND Cancel/Refund'd (or either twice)
 // Tracks the original "NEW DEPOSIT SUBMITTED" notification (chat + message
@@ -4286,6 +4369,7 @@ const adminManageAdminsKeyboard = Markup.keyboard([
 
 const adminToolsKeyboard = Markup.keyboard([
     ['🎥 · Start media', '🎥 · How to links'],
+    ['🔒 · Privacy Tutorial Video'],
     ['🏷️ · Services & Prices', '📢 · Broadcast Message'],
     ['🎯 · Broadcast to User(s)'],
     ['🔐 Admin Menu']
@@ -4860,6 +4944,22 @@ bot.hears(['🎥 · Start media', 'Start media'], (ctx) => {
         `🎥 <b>កំណត់វីដេអូណែនាំរបៀបបញ្ជាទិញ (How to Order Video Card) ៖</b>\n----------------------------------------\n\n` +
         `✍️ <b>សូមផ្ញើឯកសារវីដេអូ (Video File MP4) មកកាន់ Bot ៖</b>\n\n` +
         `<i>( វីដេអូដែលផ្ញើមក នឹងត្រូវប្រើប្រាស់ស្វ័យប្រវត្តិ សម្រាប់អតិថិជនចុចមើលក្នុងមេនុយ [ 💡 របៀបបញ្ជាទិញ ] )</i>`;
+
+    ctx.replyWithHTML(msg, adminToolsKeyboard);
+});
+
+// 🔒 PRIVACY TUTORIAL VIDEO (sent alongside the "🔒 Private" Other Reason
+// preset — shows the customer how to make their account/video public/
+// promotable, e.g. instructions on how to allow us to Promote for them)
+bot.hears(['🔒 · Privacy Tutorial Video', 'Privacy Tutorial Video'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    userState[userId] = { step: 'AWAITING_ADMIN_PRIVACY_VIDEO' };
+    const msg =
+        `🔒 <b>កំណត់វីដេអូណែនាំដោះស្រាយបញ្ហា Private (Privacy Tutorial Video) ៖</b>\n----------------------------------------\n\n` +
+        `✍️ <b>សូមផ្ញើឯកសារវីដេអូ (Video File MP4) មកកាន់ Bot ៖</b>\n\n` +
+        `<i>( វីដេអូនេះនឹងផ្ញើទៅភ្ញៀវដោយស្វ័យប្រវត្តិ ពេល Admin ចុចមូលហេតុ "🔒 Link/គណនីជា Private" លើ Order ណាមួយ )</i>`;
 
     ctx.replyWithHTML(msg, adminToolsKeyboard);
 });
@@ -5922,6 +6022,9 @@ bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) =
     } else {
         await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en);
     }
+    if (preset.requiresPrivacyVideo) {
+        await sendPrivacyTutorial(targetUserId, fullOrderId);
+    }
     await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, preset.km);
 
     try { await ctx.answerCbQuery('✅ បានផ្ញើមូលហេតុទៅភ្ញៀវ!'); } catch (e) {}
@@ -5931,6 +6034,37 @@ bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) =
             : `✅ <b>បានផ្ញើមូលហេតុ "${preset.km}" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`;
         await ctx.editMessageText(confirmNote, { parse_mode: 'HTML' });
     } catch (e) {}
+});
+
+// Customer taps [ ✅ ខ្ញុំបានធ្វើរួចរាល់ ] after watching the Privacy
+// Tutorial Video — no admin check needed, this button only ever reaches
+// the customer it was sent to. Puts the order back in front of Admin for
+// review (see reactivateOrderForReview) rather than auto-completing it —
+// the customer's own claim that their account is public now isn't proof.
+bot.action(/^private_fixed_/, async (ctx) => {
+    const dataStr = ctx.callbackQuery.data;
+    const parts = dataStr.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+    const lang = getLang(targetUserId);
+
+    const { packageName } = await lookupOrderInfo(rawOrderId, targetUserId);
+
+    const confirmMsg = lang === 'en' ?
+        `✅ <b>Thanks! We'll re-check Order ${fullOrderId} shortly.</b>` :
+        `✅ <b>អរគុណ! យើងនឹងឆែកមើល Order ${fullOrderId} ជាថ្មីម្តងទៀតឆាប់ៗនេះ។</b>`;
+    try { await ctx.answerCbQuery('✅ បានជូនដំណឹង Admin!'); } catch (e) {}
+    try { await ctx.editMessageCaption(confirmMsg, { parse_mode: 'HTML' }); } catch (e) {}
+
+    const adminMsg =
+        `🔄 <b>ភ្ញៀវបញ្ជាក់ថាបានធ្វើ Account/Link ជា Public (Order ${fullOrderId})</b>\n` +
+        `----------------------------------------\n` +
+        `📲 <b>User ID:</b> <code>${targetUserId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `💡 <i>សូមឆែកឡើងវិញថាត្រឹមត្រូវមុននឹងចុច Done។</i>\n` +
+        `🟢 <b>Status:</b> <b>Processing ⚡</b>`;
+    await reactivateOrderForReview(fullOrderId, targetUserId, adminMsg);
 });
 
 // Custom reason: prompts Admin to type free text, then forwards it verbatim.

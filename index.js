@@ -1169,7 +1169,7 @@ async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName,
         `📦 <b>Package:</b> ${packageName}\n` +
         `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n\n` +
         extraNoteLine +
-        `💡 <i>សូមបងទំនាក់ទំនងមកប្អូនតាមរយៈ @Blessing_Kh_Supports ដើម្បីដោះស្រាយបញ្ហានេះ។</i>`;
+        `💡 <i>សំរាប់ពត៌មានបន្ថែមសូមទំនាក់ទំនង @Blessing_Kh_Supports</i>`;
 
     const supportKb = Markup.inlineKeyboard([
         [Markup.button.url(userLangCode === 'en' ? '💬 Contact Admin Support (7AM-10PM)' : '💬 ទាក់ទង Admin Support (7ព្រឹក-10យប់)', 'https://t.me/Blessing_Kh_Supports')]

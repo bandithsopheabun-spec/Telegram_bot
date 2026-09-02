@@ -1109,6 +1109,10 @@ const PRESET_ORDER_REASONS = {
         emoji: '🔒',
         km: 'Link/គណនីជា Private (មិនអាចមើលឃើញ)',
         en: 'Link/account is set to Private (not viewable)',
+        // Reassures the customer their order isn't being rejected — the
+        // video/account is already in, it just needs to be made viewable.
+        extraNoteKm: '🎬 <i>វីដេអូ/គណនីរបស់អ្នកត្រូវបានទទួលរួចរាល់ — គ្រាន់តែរង់ចាំធ្វើតាមការណែនាំខាងក្រោមប៉ុណ្ណោះ!</i>',
+        extraNoteEn: "🎬 <i>Your video/account has already been received — just follow the instructions below.</i>",
         // Sends the standard reason message PLUS a tutorial video (see
         // privacyTutorialVideoId / "🔒 · Privacy Tutorial Video" in Tools &
         // System) walking the customer through making their account/video
@@ -1141,21 +1145,30 @@ const PRESET_ORDER_REASONS = {
 // of Service"). Unlike Done/Cancel, this does NOT change order status or
 // refund anything — it is purely an explanatory message so Admin can still
 // press Done or Cancel/Refund on the original order card afterward.
-async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, reasonKm, reasonEn) {
+async function notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, reasonKm, reasonEn, extraNoteKm, extraNoteEn) {
     const userLangCode = getLang(targetUserId);
     const reasonText = userLangCode === 'en' ? (reasonEn || reasonKm) : (reasonKm || reasonEn);
+    // Optional preset-specific line inserted between the reason and the
+    // Contact Support CTA — e.g. the "🔒 Private" preset uses this to
+    // reassure the customer their order/video IS already in, it just needs
+    // the account made viewable (see the call site below).
+    const extraNoteLine = userLangCode === 'en'
+        ? (extraNoteEn ? `${extraNoteEn}\n\n` : '')
+        : (extraNoteKm ? `${extraNoteKm}\n\n` : '');
     const msg = userLangCode === 'en' ?
         `⚠️ <b>Your Order Needs Attention!</b>\n` +
         `----------------------------------------\n` +
         `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
         `📦 <b>Package:</b> ${packageName}\n` +
         `📝 <b>Reason:</b> ${reasonText}\n\n` +
+        extraNoteLine +
         `💡 <i>Please contact us via @Blessing_Kh_Supports to resolve this.</i>` :
         `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវការការយកចិត្តទុកដាក់បន្ថែម!</b>\n` +
         `----------------------------------------\n` +
         `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
         `📦 <b>Package:</b> ${packageName}\n` +
         `📝 <b>មូលហេតុ ៖</b> ${reasonText}\n\n` +
+        extraNoteLine +
         `💡 <i>សូមបងទំនាក់ទំនងមកប្អូនតាមរយៈ @Blessing_Kh_Supports ដើម្បីដោះស្រាយបញ្ហានេះ។</i>`;
 
     const supportKb = Markup.inlineKeyboard([
@@ -6020,7 +6033,7 @@ bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) =
     if (preset.requiresNewLink) {
         await requestReplacementLink(targetUserId, fullOrderId, packageName, preset.km, preset.en);
     } else {
-        await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en);
+        await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en, preset.extraNoteKm, preset.extraNoteEn);
     }
     if (preset.requiresPrivacyVideo) {
         await sendPrivacyTutorial(targetUserId, fullOrderId);

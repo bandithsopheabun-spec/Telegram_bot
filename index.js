@@ -1656,6 +1656,43 @@ function savePrivacyTutorialVideoConfig(fileId) {
 const ADMINS_FILE = path.join(__dirname, 'admins_config.json');
 let extraAdminIds = [];
 
+// Authorized Admin Telegram IDs. Default admin IDs used only when ADMIN_IDS
+// is not set in .env — set ADMIN_IDS to take full, exclusive control of who
+// has admin access.
+const DEFAULT_ADMIN_IDS = [521984577];
+// `let`, not `const` — extraAdminIds is still [] at this exact line (its
+// real value only arrives later, once bootLoadAllConfigs's Supabase
+// rehydration + loadAdminsConfig() finish, see the extraAdminIds.forEach
+// re-sync inside bootLoadAllConfigs below). Building this Set as `const`
+// with a one-time merge right here — the previous bug — merged against an
+// always-empty array, so every bot-added admin silently lost access on
+// every single redeploy (confirmed live: an admin added via "Manage
+// Admins" stopped working immediately after the next deploy) until they
+// were re-added while the process happened to still be running.
+let registeredAdminIds = new Set(
+    process.env.ADMIN_IDS
+        ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
+        : DEFAULT_ADMIN_IDS
+);
+
+// Host support access — for white-label clones of this bot (see NEW_CLIENT_SETUP.md),
+// the hosting provider sets their own Telegram ID here to retain admin access for
+// support/billing on every clone they host. Unlike the old hardcoded ALLOWED_ADMIN_IDS
+// bypass (removed as a security fix), this is a named, client-visible env var the
+// client can see in their own deployment and revoke by simply not setting it.
+const hostSuperAdminIds = new Set(
+    (process.env.HOST_SUPER_ADMIN_ID || '')
+        .split(',')
+        .map(id => parseInt(id.trim()))
+        .filter(id => !isNaN(id))
+);
+
+function isAdmin(userId) {
+    if (!userId) return false;
+    const numericId = parseInt(userId);
+    return registeredAdminIds.has(numericId) || hostSuperAdminIds.has(numericId);
+}
+
 function loadAdminsConfig() {
     try {
         if (fs.existsSync(ADMINS_FILE)) {
@@ -1733,6 +1770,11 @@ async function bootLoadAllConfigs() {
     loadHowtoConfig();
     loadMediaConfig();
     loadAdminsConfig();
+    // Re-sync now that extraAdminIds holds its real (rehydrated) value —
+    // registeredAdminIds was built from an empty extraAdminIds at module
+    // load time (see its declaration above), so without this merge every
+    // bot-added admin would silently lose access on every redeploy.
+    extraAdminIds.forEach(id => registeredAdminIds.add(id));
     loadResellersConfig();
     resellerIds = new Set(resellerIdsList);
 }
@@ -4322,35 +4364,11 @@ let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/
 // howtoVideoLinks is declared earlier (near loadHowtoConfig/saveHowtoConfig) so the
 // startup loadHowtoConfig() call can assign it without a temporal-dead-zone error.
 
-// Authorized Admin Telegram IDs (Strict Security: Only 521984577)
-// Default admin IDs used only when ADMIN_IDS is not set in .env — set ADMIN_IDS
-// to take full, exclusive control of who has admin access.
-const DEFAULT_ADMIN_IDS = [521984577];
-const registeredAdminIds = new Set(
-    process.env.ADMIN_IDS
-        ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
-        : DEFAULT_ADMIN_IDS
-);
-// Merge in admins added at runtime via the "Manage Admins" menu (loaded from admins_config.json above)
-extraAdminIds.forEach(id => registeredAdminIds.add(id));
-
-// Host support access — for white-label clones of this bot (see NEW_CLIENT_SETUP.md),
-// the hosting provider sets their own Telegram ID here to retain admin access for
-// support/billing on every clone they host. Unlike the old hardcoded ALLOWED_ADMIN_IDS
-// bypass (removed as a security fix), this is a named, client-visible env var the
-// client can see in their own deployment and revoke by simply not setting it.
-const hostSuperAdminIds = new Set(
-    (process.env.HOST_SUPER_ADMIN_ID || '')
-        .split(',')
-        .map(id => parseInt(id.trim()))
-        .filter(id => !isNaN(id))
-);
-
-function isAdmin(userId) {
-    if (!userId) return false;
-    const numericId = parseInt(userId);
-    return registeredAdminIds.has(numericId) || hostSuperAdminIds.has(numericId);
-}
+// DEFAULT_ADMIN_IDS / registeredAdminIds / hostSuperAdminIds / isAdmin() now
+// live right after extraAdminIds above (near loadAdminsConfig/
+// bootLoadAllConfigs) — moved there to fix a real bug where every redeploy
+// silently dropped all bot-added admins. See the comment at that
+// declaration for the full explanation.
 
 // Dynamic Admin Keyboards Generator
 function getAdminMainKeyboard() {

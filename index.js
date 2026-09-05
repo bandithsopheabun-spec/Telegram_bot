@@ -1436,6 +1436,19 @@ async function postProblemTicket(fullOrderId, targetUserId, packageName, targetL
     }
 
     if (supabase) {
+        // Resolve any previous ticket row for this order still 'Open' —
+        // switching reasons (e.g. Admin sends "tiktok" then later switches
+        // to "private" for the same order) would otherwise leave the old
+        // row Open forever, where startProblemTicketTimeoutSweep could
+        // later auto Cancel/Refund the order under a stale, superseded
+        // deadline the new reason was never meant to carry.
+        try {
+            await supabase.from('problem_tickets')
+                .update({ status: 'Resolved (Superseded)', resolved_at: new Date().toISOString() })
+                .eq('order_id', fullOrderId)
+                .eq('status', 'Open');
+        } catch (e) {}
+
         try {
             await supabase.from('problem_tickets').insert([{
                 order_id: fullOrderId, telegram_id: targetUserId, package_name: packageName,
@@ -4538,11 +4551,27 @@ let depositMode = 'MANUAL'; // Default: Mode 1 - Manual Admin Approval ('MANUAL'
 // right where it's declared, avoiding the exact "referenced before its
 // own declaration executes at module-load time" trap that broke
 // registeredAdminIds earlier this session.
+// Only these 6 values are ever legitimately assigned to depositMode (see
+// the mode-cycle button below) — used both to validate what comes back
+// from Supabase and to keep the auto-approval gate in confirm_dep_ below
+// allowlist-based instead of exclusion-based.
+const VALID_DEPOSIT_MODES = ['MANUAL', 'AUTO', 'PAYWAY', 'BAKONG', 'WING', 'KHQRCC'];
+
 async function rehydrateDepositMode() {
     if (!supabase) return;
     try {
         const { data, error } = await supabase.from('bot_settings').select('value').eq('key', 'deposit_mode').maybeSingle();
         if (error || !data || !data.value) return;
+        // A hand-edited or corrupted row (typo, wrong case, stray
+        // whitespace) must never become the live depositMode — the
+        // auto-approval gate in confirm_dep_ treats "not exactly MANUAL and
+        // not exactly PAYWAY" as license to auto-credit, so any unrecognized
+        // string there would silently auto-approve every deposit with zero
+        // verification. Ignore it and keep the safe MANUAL default instead.
+        if (!VALID_DEPOSIT_MODES.includes(data.value)) {
+            console.error('⚠️ rehydrateDepositMode: ignoring unrecognized deposit_mode value:', data.value);
+            return;
+        }
         depositMode = data.value;
         console.log('✅ Rehydrated depositMode from Supabase:', depositMode);
     } catch (e) {
@@ -5653,7 +5682,11 @@ bot.action(/^confirm_dep/, async (ctx) => {
     const isBakongVerified = skipAutoCheck ? false : await checkBakongTransaction(md5Hash);
     const isAcledaVerified = (!skipAutoCheck && isAcledaPaymentOn) ? await checkAcledaTransaction(depId, amount) : false;
 
-    if (depositMode !== 'MANUAL' && depositMode !== 'PAYWAY' && (isInstantAutoDepositOn || isBakongVerified || isAcledaVerified)) {
+    // Allowlist-based (not "!== MANUAL && !== PAYWAY") — defense in depth so
+    // an unrecognized depositMode value can never fall into the auto-credit
+    // branch by default; see VALID_DEPOSIT_MODES / rehydrateDepositMode.
+    const isAutoApprovalMode = depositMode === 'AUTO' || depositMode === 'BAKONG' || depositMode === 'WING' || depositMode === 'KHQRCC';
+    if (isAutoApprovalMode && (isInstantAutoDepositOn || isBakongVerified || isAcledaVerified)) {
         // Instant 100% Fully Automated Deposit Approval!
         const currentBal = await getFreshBalance(userId);
         const newBal = currentBal + totalCredit;

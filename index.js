@@ -849,15 +849,17 @@ function startAutoPaymentEngine() {
     }, 60000); // 60s, not 7s — see BAKONG_DAILY_CALL_BUDGET comment above
 }
 
-// Auto-resolves "🔞 Under 18" Problem Tickets nobody responded to within 48
-// hours (see sendAgeOptionsMenu / underage_opt1-3 above) — same outcome as
-// the customer's own "keep the money in my Wallet" option (Cancel/Refund
-// via the shared refundOrder helper, so it gets the exact same
-// anti-double-refund guards), just triggered by a timeout instead of a
-// button tap. Only ever touches presetKey 'underage' tickets — every other
-// reason (TikTok ToS, Private, etc.) has no such deadline and stays open
-// until Admin acts. Checked every 30 minutes; the 48h deadline itself
-// doesn't need finer precision than that.
+// Auto-resolves Problem Tickets nobody responded to within 48 hours — for
+// "🔞 Under 18" (see sendAgeOptionsMenu / underage_opt1-3 above) and now
+// also "🚫 TikTok ToS violation": same outcome as the customer's own "keep
+// the money in my Wallet" option (Cancel/Refund via the shared refundOrder
+// helper, so it gets the exact same anti-double-refund guards), just
+// triggered by a timeout instead of a button tap. Only ever touches these
+// two presetKeys — "🔒 Private" has no such deadline and stays open until
+// Admin acts. Checked every 30 minutes; the 48h deadline itself doesn't
+// need finer precision than that.
+const PROBLEM_TICKET_AUTO_TIMEOUT_PRESETS = ['underage', 'tiktok'];
+
 function startProblemTicketTimeoutSweep() {
     setInterval(async () => {
         if (!supabase) return;
@@ -867,7 +869,7 @@ function startProblemTicketTimeoutSweep() {
                 .from('problem_tickets')
                 .select('*')
                 .eq('status', 'Open')
-                .eq('preset_key', 'underage')
+                .in('preset_key', PROBLEM_TICKET_AUTO_TIMEOUT_PRESETS)
                 .lt('created_at', cutoffIso);
             if (!staleTickets || staleTickets.length === 0) return;
 
@@ -893,7 +895,8 @@ function startProblemTicketTimeoutSweep() {
                                 `----------------------------------------\n` +
                                 `📲 <b>User ID:</b> <code>${targetUserId}</code>\n` +
                                 `💵 <b>Refunded:</b> $${result.refundAmount.toFixed(2)} USD\n` +
-                                `💡 <i>ភ្ញៀវមិនបានឆ្លើយតបចំពោះមូលហេតុ "🔞 Under 18" ក្នុងរយៈពេល 48 ម៉ោងទេ។</i>`,
+                                `📝 <b>មូលហេតុ ៖</b> ${ticket.reason || 'N/A'}\n` +
+                                `💡 <i>ភ្ញៀវមិនបានឆ្លើយតបចំពោះមូលហេតុនេះក្នុងរយៈពេល 48 ម៉ោងទេ។</i>`,
                                 { parse_mode: 'HTML' }
                             );
                         } catch (e) {}
@@ -1162,7 +1165,12 @@ const PRESET_ORDER_REASONS = {
     tiktok: {
         emoji: '🚫',
         km: 'ខុសលក្ខខ័ណ្ឌប្រើប្រាស់ TikTok (Violates TikTok Terms of Service)',
-        en: "Violates TikTok's Terms of Service (ToS)"
+        en: "Violates TikTok's Terms of Service (ToS)",
+        // Lets the customer know there's a deadline — see
+        // PROBLEM_TICKET_AUTO_TIMEOUT_PRESETS / startProblemTicketTimeoutSweep,
+        // which auto Cancel/Refunds this exact preset after 48h of silence.
+        extraNoteKm: '⏰ <i>ប្រសិនបើមិនទាក់ទង Admin ក្នុងរយៈពេល 48 ម៉ោង Order នេះនឹងត្រូវបានបោះបង់ និងវេរលុយសងចូល Wallet វិញដោយស្វ័យប្រវត្តិ។</i>',
+        extraNoteEn: "⏰ <i>If you don't contact Admin within 48 hours, this order will be automatically canceled and refunded to your Wallet.</i>"
     },
     private: {
         emoji: '🔒',

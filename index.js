@@ -701,6 +701,38 @@ function saveProblemSolveGroupId(chatId) {
         .catch(e => console.error('⚠️ saveProblemSolveGroupId error:', e.message));
 }
 
+// publicChannelId — the STABLE, explicitly-set destination for
+// send_bcast_'s "also post to the public channel" step (see /setpublicchannel
+// below). Deliberately NOT the same as the generic detectedChannelChatId
+// auto-catcher further down in this file: that value gets silently
+// overwritten by ANY channel-type update the bot processes (e.g. an admin
+// clicking Done/Cancel/Approve inside the private Blessing.Kh_Purchase
+// Order channel, which the bot posts to constantly) — so broadcasts using
+// it could drift to the wrong channel without anyone noticing. This is
+// set once, on purpose, and only changes when an Admin re-runs the
+// command.
+let publicChannelId = null;
+
+async function rehydratePublicChannelId() {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('bot_settings').select('value').eq('key', 'public_channel_id').maybeSingle();
+        if (error || !data || !data.value) return;
+        publicChannelId = parseInt(data.value);
+        console.log('✅ Rehydrated publicChannelId from Supabase:', publicChannelId);
+    } catch (e) {
+        console.error('⚠️ rehydratePublicChannelId error:', e.message);
+    }
+}
+
+function savePublicChannelId(chatId) {
+    if (!supabase) return;
+    supabase.from('bot_settings')
+        .upsert([{ key: 'public_channel_id', value: String(chatId), updated_at: new Date().toISOString() }], { onConflict: 'key' })
+        .then(() => {})
+        .catch(e => console.error('⚠️ savePublicChannelId error:', e.message));
+}
+
 // NBC's Bakong Open API allows only 100 requests/day per token (discovered
 // the hard way: a customer's real, successful payment sat un-credited all
 // day because the 7s-interval polling had already burned through the daily
@@ -1983,6 +2015,7 @@ async function bootLoadAllConfigs() {
         await rehydrateJsonConfig('admins_config', ADMINS_FILE);
         await rehydrateJsonConfig('resellers_config', RESELLERS_FILE);
         await rehydrateProblemSolveGroupId();
+        await rehydratePublicChannelId();
     }
     loadDynamicPackages();
     loadHowtoConfig();
@@ -4177,8 +4210,12 @@ bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
         }
     }
 
-    // 2. Copy message to ${BRAND_NAME}_Channel (https://t.me/+4JRdF_NXZTFlNmY1 / ID: -1003926070646)
-    const targetChannel = detectedChannelChatId || process.env.BROADCAST_CHANNEL_ID || process.env.CHANNEL_CHAT_ID || -1003926070646;
+    // 2. Copy message to the public channel (see /setpublicchannel) —
+    // deliberately NOT detectedChannelChatId, which drifts to whatever
+    // channel most recently had ANY bot activity (e.g. an admin clicking
+    // Done/Cancel inside the private Purchase Order channel) and could
+    // silently misdirect this to the wrong place.
+    const targetChannel = publicChannelId || process.env.BROADCAST_CHANNEL_ID || process.env.CHANNEL_CHAT_ID;
     if (targetChannel) {
         try {
             await bot.telegram.copyMessage(targetChannel, userId, msgId);
@@ -4188,12 +4225,12 @@ bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
         }
     }
 
-    const reportMsg = 
+    const reportMsg =
         `✅ <b>បានផ្ញើសារប្រកាសជូនដំណឹងជោគជ័យ ១០០%! (Broadcast Complete)</b>\n` +
         `----------------------------------------\n\n` +
         `🟢 <b>ផ្ញើជូនអតិថិជន 1-on-1 ៖</b> <b>${success} Users</b>\n` +
         `🔴 <b>បរាជ័យ (Block Bot) ៖</b> <b>${failed} Users</b>\n` +
-        `📢 <b>ប្រកាសចូល ${BRAND_NAME}_Channel ៖</b> ${channelPosted ? 'ជោគជ័យ ✅' : 'អត់បានផ្ញើ (សូម Add Bot ចូល Channel ជា Admin)'}`;
+        `📢 <b>ប្រកាសចូល Public Channel ៖</b> ${channelPosted ? 'ជោគជ័យ ✅' : (targetChannel ? 'អត់បានផ្ញើ (សូម Add Bot ចូល Channel ជា Admin)' : 'មិនទាន់កំណត់ Channel ទេ — សូម Run /setpublicchannel ក្នុង Channel ជាមុនសិន')}`;
 
     return ctx.replyWithHTML(reportMsg, adminToolsKeyboard);
 });
@@ -4518,7 +4555,12 @@ bot.command(['setproblemgroup'], (ctx) => {
     );
 });
 
-// Listen to Channel posts for /id command in Channels
+// Listen to Channel posts for /id and /setpublicchannel commands — a
+// command typed as a post inside a CHANNEL arrives as a channel_post
+// update, not a message update, so bot.command(...) never sees it; this is
+// the only way to catch it. No isAdmin() check here (channel_post has no
+// reliable ctx.from) — Telegram's own channel-posting permission already
+// gatekeeps who can post here in the first place.
 bot.on('channel_post', (ctx) => {
     if (ctx.chat && ctx.chat.type === 'channel') {
         detectedChannelChatId = ctx.chat.id;
@@ -4527,6 +4569,15 @@ bot.on('channel_post', (ctx) => {
         const text = ctx.channelPost ? (ctx.channelPost.text || '').trim() : '';
         if (text.toLowerCase().includes('/id') || text.toLowerCase() === 'id') {
             ctx.replyWithHTML(`🆔 <b>Channel Chat ID របស់អ្នកគឺ ៖</b> <code>${ctx.chat.id}</code>`);
+        }
+        if (text.toLowerCase().includes('/setpublicchannel')) {
+            publicChannelId = ctx.chat.id;
+            savePublicChannelId(publicChannelId);
+            ctx.replyWithHTML(
+                `✅ <b>បានកំណត់ Channel នេះជាកន្លែងផ្សព្វផ្សាយសារ Broadcast ជាសាធារណៈរួចរាល់!</b>\n` +
+                `🆔 <b>Chat ID:</b> <code>${publicChannelId}</code>\n\n` +
+                `ចាប់ពីពេលនេះទៅ រាល់ "📢 Broadcast Message" ដែលផ្ញើទៅភ្ញៀវទាំងអស់ នឹងប្រកាសមកកន្លែងនេះជានិច្ចផងដែរ។`
+            );
         }
     }
 });

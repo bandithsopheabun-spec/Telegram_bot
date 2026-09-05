@@ -1154,11 +1154,10 @@ async function lookupOrderInfo(rawOrderId, targetUserId) {
     return { packageName: 'SMM Service', targetLink: null };
 }
 
-// One-tap preset explanations offered on the "❓ Other Reason" picker
-// (see the other_order_ action below), alongside the free-text Custom
-// Reason option. Keyed by a short id used in callback_data
-// (reason_<key>_<orderId>_<userId>) — keys must stay single words (no
-// underscores) since callback_data parsing splits on '_'.
+// One-tap preset explanations offered on the "❓ Other Reason" picker (see
+// the other_order_ action below). Keyed by a short id used in
+// callback_data (reason_<key>_<orderId>_<userId>) — keys must stay single
+// words (no underscores) since callback_data parsing splits on '_'.
 const PRESET_ORDER_REASONS = {
     tiktok: {
         emoji: '🚫',
@@ -1179,11 +1178,6 @@ const PRESET_ORDER_REASONS = {
         // public, with a button they tap once done.
         requiresPrivacyVideo: true
     },
-    wronglink: {
-        emoji: '🔗',
-        km: 'Link មិនត្រឹមត្រូវ / មិនមែន TikTok',
-        en: 'Invalid link / not a TikTok link'
-    },
     underage: {
         emoji: '🔞',
         km: 'គណនីទាបជាងអាយុ 18 ឆ្នាំ / មាតិកាហាមឃាត់',
@@ -1194,11 +1188,6 @@ const PRESET_ORDER_REASONS = {
         // are chosen within 48h, startProblemTicketTimeoutSweep auto
         // cancels & refunds the order.
         requiresAgeOptions: true
-    },
-    deleted: {
-        emoji: '🗑️',
-        km: 'Video ត្រូវបានលុប / រកមិនឃើញ',
-        en: 'Video was deleted / not found'
     }
 };
 
@@ -2869,21 +2858,6 @@ bot.on('text', async (ctx, next) => {
                 await ctx.replyWithHTML('⚠️ Could not generate message preview, but message ID is captured.', targetedBcastKb);
             }
             return;
-        }
-
-        // Must live here too (same reasoning as the broadcast steps above) —
-        // a custom Order "Other Reason" is free text typed by Admin and would
-        // otherwise risk being intercepted by unrelated checks further down
-        // in the generic text handler (e.g. FLOW C's order-code-format check).
-        if (state.step === 'AWAITING_ADMIN_ORDER_OTHER_REASON') {
-            delete userState[userId];
-            const { targetUserId, fullOrderId, packageName, targetLink } = state;
-            await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, text, text);
-            await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, text, 'custom');
-            return ctx.replyWithHTML(
-                `✅ <b>បានផ្ញើមូលហេតុទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`,
-                getAdminMainKeyboard()
-            );
         }
 
         if (state.step === 'AWAITING_ADMIN_CREDIT_ID') {
@@ -6198,7 +6172,6 @@ bot.action(/^other_order_/, async (ctx) => {
         ...Object.entries(PRESET_ORDER_REASONS).map(([key, r]) =>
             [Markup.button.callback(`${r.emoji} ${r.km}`, `reason_${key}_${rawOrderId}_${targetUserId}`)]
         ),
-        [Markup.button.callback('✍️ សរសេរមូលហេតុផ្សេង (Custom Reason)', `reason_custom_${rawOrderId}_${targetUserId}`)],
         [Markup.button.callback('❌ បិទ (Close)', 'reason_close')]
     ]);
 
@@ -6214,7 +6187,7 @@ bot.action(/^other_order_/, async (ctx) => {
 // Preset reasons (see PRESET_ORDER_REASONS above): sends immediately, no
 // extra typing. One handler covers all preset keys instead of duplicating
 // near-identical code per reason.
-bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) => {
+bot.action(/^reason_(tiktok|private|underage)_/, async (ctx) => {
     const adminId = ctx.from.id;
     if (!isAdmin(adminId)) {
         try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
@@ -6357,28 +6330,6 @@ bot.action(/^private_fixed_/, async (ctx) => {
         `✅ <b>អរគុណ! យើងនឹងឆែកមើល Order ${fullOrderId} ជាថ្មីម្តងទៀតឆាប់ៗនេះ។</b>`;
     try { await ctx.answerCbQuery('✅ បានជូនដំណឹង Admin!'); } catch (e) {}
     try { await ctx.editMessageCaption(confirmMsg, { parse_mode: 'HTML' }); } catch (e) {}
-});
-
-// Custom reason: prompts Admin to type free text, then forwards it verbatim.
-bot.action(/^reason_custom_/, async (ctx) => {
-    const adminId = ctx.from.id;
-    if (!isAdmin(adminId)) {
-        try { return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!', { show_alert: true }); } catch (e) { return; }
-    }
-
-    const dataStr = ctx.callbackQuery.data;
-    const parts = dataStr.split('_');
-    const targetUserId = parseInt(parts.pop());
-    const rawOrderId = parts.slice(2).join('_');
-    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
-
-    const { packageName, targetLink } = await lookupOrderInfo(rawOrderId, targetUserId);
-    userState[adminId] = { step: 'AWAITING_ADMIN_ORDER_OTHER_REASON', targetUserId, fullOrderId, packageName, targetLink };
-
-    try { await ctx.answerCbQuery(); } catch (e) {}
-    try {
-        await ctx.editMessageText(`✍️ <b>សូមវាយសារមូលហេតុសម្រាប់ផ្ញើទៅភ្ញៀវ Order ${fullOrderId} ៖</b>`, { parse_mode: 'HTML' });
-    } catch (e) {}
 });
 
 bot.action('reason_close', async (ctx) => {

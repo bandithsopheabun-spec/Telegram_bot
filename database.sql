@@ -71,7 +71,14 @@ CREATE TABLE IF NOT EXISTS public.problem_tickets (
     status TEXT NOT NULL DEFAULT 'Open',
     admin_name TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    resolved_at TIMESTAMP WITH TIME ZONE
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    -- Which PRESET_ORDER_REASONS key created this ticket ('tiktok',
+    -- 'private', 'wronglink', 'underage', 'deleted', or 'custom' for a
+    -- free-typed reason) — lets startProblemTicketTimeoutSweep in index.js
+    -- target only 'underage' tickets for its 48h auto Cancel/Refund
+    -- without matching on the (language-dependent) reason text.
+    preset_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_problem_tickets_telegram_id ON public.problem_tickets(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_problem_tickets_order_id ON public.problem_tickets(order_id);
+CREATE INDEX IF NOT EXISTS idx_problem_tickets_preset_key ON public.problem_tickets(preset_key);

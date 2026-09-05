@@ -849,8 +849,68 @@ function startAutoPaymentEngine() {
     }, 60000); // 60s, not 7s — see BAKONG_DAILY_CALL_BUDGET comment above
 }
 
+// Auto-resolves "🔞 Under 18" Problem Tickets nobody responded to within 48
+// hours (see sendAgeOptionsMenu / underage_opt1-3 above) — same outcome as
+// the customer's own "keep the money in my Wallet" option (Cancel/Refund
+// via the shared refundOrder helper, so it gets the exact same
+// anti-double-refund guards), just triggered by a timeout instead of a
+// button tap. Only ever touches presetKey 'underage' tickets — every other
+// reason (TikTok ToS, Private, etc.) has no such deadline and stays open
+// until Admin acts. Checked every 30 minutes; the 48h deadline itself
+// doesn't need finer precision than that.
+function startProblemTicketTimeoutSweep() {
+    setInterval(async () => {
+        if (!supabase) return;
+        try {
+            const cutoffIso = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+            const { data: staleTickets } = await supabase
+                .from('problem_tickets')
+                .select('*')
+                .eq('status', 'Open')
+                .eq('preset_key', 'underage')
+                .lt('created_at', cutoffIso);
+            if (!staleTickets || staleTickets.length === 0) return;
+
+            for (const ticket of staleTickets) {
+                try {
+                    const fullOrderId = ticket.order_id;
+                    const targetUserId = ticket.telegram_id;
+                    const result = await refundOrder(fullOrderId, targetUserId, 'Bot (Auto — លុះកំណត់ 48 ម៉ោង)');
+
+                    // Mark THIS specific row resolved regardless of whether
+                    // it's still the "open" one for the order (a newer
+                    // ticket may have superseded it — resolveProblemTicket
+                    // inside refundOrder only updates rows still 'Open' for
+                    // this order_id, which could be a different, newer row).
+                    await supabase.from('problem_tickets')
+                        .update({ status: 'Resolved (Auto Cancel/Refund - 48h Timeout)', resolved_at: new Date().toISOString() })
+                        .eq('id', ticket.id);
+
+                    if (result.refunded) {
+                        try {
+                            await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID,
+                                `⏰ <b>Auto Cancel/Refund — លុះកំណត់ 48 ម៉ោង (Order ${fullOrderId})</b>\n` +
+                                `----------------------------------------\n` +
+                                `📲 <b>User ID:</b> <code>${targetUserId}</code>\n` +
+                                `💵 <b>Refunded:</b> $${result.refundAmount.toFixed(2)} USD\n` +
+                                `💡 <i>ភ្ញៀវមិនបានឆ្លើយតបចំពោះមូលហេតុ "🔞 Under 18" ក្នុងរយៈពេល 48 ម៉ោងទេ។</i>`,
+                                { parse_mode: 'HTML' }
+                            );
+                        } catch (e) {}
+                    }
+                } catch (ticketErr) {
+                    console.error(`⚠️ startProblemTicketTimeoutSweep: error processing ticket ${ticket.id}:`, ticketErr.message);
+                }
+            }
+        } catch (e) {
+            console.error('⚠️ startProblemTicketTimeoutSweep error:', e.message);
+        }
+    }, 30 * 60 * 1000);
+}
+
 rehydrateMode1QrPhoto().catch(() => {});
 rehydratePendingDeposits().then(startAutoPaymentEngine).catch(startAutoPaymentEngine);
+startProblemTicketTimeoutSweep();
 
 // User State & Preferences Storage (In-memory cache + DB fallback)
 const userState = {};
@@ -1128,10 +1188,12 @@ const PRESET_ORDER_REASONS = {
         emoji: '🔞',
         km: 'គណនីទាបជាងអាយុ 18 ឆ្នាំ / មាតិកាហាមឃាត់',
         en: 'Account under 18 years old / prohibited content',
-        // Instead of a dead-end explanation, let the customer fix this
-        // themselves by submitting a different, compliant link — reusing
-        // the order they already paid for (no refund, no new charge).
-        requiresNewLink: true
+        // Instead of a dead-end explanation, gives the customer 4 concrete
+        // options (new 18+ account, a friend's 18+ link, keep the money in
+        // Wallet, or just ask Support) — see sendAgeOptionsMenu. If none
+        // are chosen within 48h, startProblemTicketTimeoutSweep auto
+        // cancels & refunds the order.
+        requiresAgeOptions: true
     },
     deleted: {
         emoji: '🗑️',
@@ -1245,6 +1307,57 @@ async function sendPrivacyTutorial(targetUserId, fullOrderId) {
     }
 }
 
+// Sent instead of notifyCustomerOrderReason for presets with
+// requiresAgeOptions: true (currently only "🔞 Under 18 / prohibited
+// content") — gives the customer 4 concrete ways to resolve it themselves:
+// (1/2) submit a compliant 18+ link (own new account or a friend's,
+// handled identically via requestReplacementLink), (3) keep the money in
+// their Wallet for a future order (self-service Cancel/Refund via
+// refundOrder — no Admin approval needed, it's already their own money),
+// or (4) just contact Support. If none are chosen within 48h,
+// startProblemTicketTimeoutSweep auto-resolves it the same way option 3 does.
+async function sendAgeOptionsMenu(targetUserId, fullOrderId, packageName) {
+    const userLangCode = getLang(targetUserId);
+    const cleanOrderId = fullOrderId.replace('#', '');
+
+    const msg = userLangCode === 'en' ?
+        `⚠️ <b>Your Order Needs Attention!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `📝 <b>Reason:</b> Account under 18 years old / prohibited content\n\n` +
+        `👇 <b>Please choose one option below within 48 hours:</b>` :
+        `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវការការយកចិត្តទុកដាក់បន្ថែម!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${packageName}\n` +
+        `📝 <b>មូលហេតុ ៖</b> គណនីទាបជាងអាយុ 18 ឆ្នាំ / មាតិកាហាមឃាត់\n\n` +
+        `👇 <b>សូមជ្រើសរើសមួយក្នុងចំណោមជម្រើសខាងក្រោម ក្នុងរយៈពេល 48 ម៉ោង ៖</b>`;
+
+    const kb = Markup.inlineKeyboard([
+        [Markup.button.callback(
+            userLangCode === 'en' ? '1️⃣ Create a new 18+ account & resend link' : '1️⃣ បង្កើតគណនីថ្មី អាយុលើស 18 & ផ្ញើ Link ថ្មី',
+            `underage_opt1_${cleanOrderId}_${targetUserId}`
+        )],
+        [Markup.button.callback(
+            userLangCode === 'en' ? "2️⃣ Send a friend's 18+ account link instead" : '2️⃣ ផ្ញើ Link មិត្តភក្តិ (អាយុលើស 18)',
+            `underage_opt2_${cleanOrderId}_${targetUserId}`
+        )],
+        [Markup.button.callback(
+            userLangCode === 'en' ? '3️⃣ Keep the money in my Wallet for later' : '3️⃣ រក្សាលុយក្នុង Wallet សម្រាប់ក្រោយ',
+            `underage_opt3_${cleanOrderId}_${targetUserId}`
+        )],
+        [Markup.button.url(
+            userLangCode === 'en' ? '💬 More info / Contact Admin' : '💬 ព័ត៌មានបន្ថែម / ទំនាក់ទំនង Admin',
+            'https://t.me/Blessing_Kh_Supports'
+        )]
+    ]);
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, msg, { parse_mode: 'HTML', ...kb });
+    } catch (e) {}
+}
+
 // In-memory tracking of the currently-open Problem-Solve ticket message per
 // order — {chatId, messageId} — so done_order/cancel_order below can tell
 // whether they're being resolved straight from that ticket (see
@@ -1269,7 +1382,7 @@ const orderNotifyMessages = {};
 // Supabase problem_tickets so Admin/Users & Balances can show resolution
 // history. If a ticket for this order is already open (Admin sent a 2nd
 // reason), the old ticket message is replaced rather than left duplicated.
-async function postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, reasonText) {
+async function postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, reasonText, presetKey = null) {
     if (problemTickets[fullOrderId]) {
         try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
         delete problemTickets[fullOrderId];
@@ -1329,7 +1442,7 @@ async function postProblemTicket(fullOrderId, targetUserId, packageName, targetL
         try {
             await supabase.from('problem_tickets').insert([{
                 order_id: fullOrderId, telegram_id: targetUserId, package_name: packageName,
-                reason: reasonText, status: 'Open'
+                reason: reasonText, status: 'Open', preset_key: presetKey
             }]);
         } catch (e) {}
     }
@@ -1419,6 +1532,101 @@ async function reactivateOrderForReview(fullOrderId, targetUserId, adminMsgHtml)
     } catch (e) {}
 
     return { alreadyResolved: false };
+}
+
+// Shared Cancel/Refund logic — used by Admin's cancel_order_ button, the
+// customer's own "keep the money in my Wallet" self-service option
+// (underage_opt3_), and startProblemTicketTimeoutSweep's 48h auto-cancel.
+// Centralizing this means all three get the same anti-double-refund
+// guards (in-memory + DB-level compare-and-swap) instead of the
+// auto-timeout/self-service paths risking a duplicate refund that the
+// original admin-only cancel_order_ handler was already careful to
+// prevent. Whichever card is currently live for this order — a
+// Problem-Solve ticket, or the Purchase Order Group card itself — is
+// cleared/updated to show the final status; the customer is always
+// notified. Returns {refunded:false} if the order was already resolved,
+// or {refunded:true, refundAmount, newBalance} on success.
+async function refundOrder(fullOrderId, targetUserId, resolvedByLabel) {
+    if (processedOrderActions.has(fullOrderId)) {
+        return { refunded: false };
+    }
+    processedOrderActions.add(fullOrderId);
+
+    let targetOrder = null;
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('orders')
+                .update({ status: 'Canceled & Refunded' })
+                .or(`order_id.ilike.%${fullOrderId.replace('#', '')}%`)
+                .neq('status', 'Completed')
+                .neq('status', 'Canceled & Refunded')
+                .select();
+            if (!data || data.length === 0) {
+                return { refunded: false };
+            }
+            targetOrder = data[0];
+        } catch (e) {}
+    }
+
+    if (userOrdersCache[targetUserId]) {
+        const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(fullOrderId.replace('#', '')));
+        if (item) {
+            item.status = 'Canceled & Refunded';
+            if (!targetOrder) targetOrder = item;
+        }
+    }
+
+    // Whichever card is currently live gets cleared/updated — the ticket
+    // (if this order was escalated) and/or the Purchase Order Group card
+    // (the original, or a later reactivation) — same "at most one live
+    // card" bookkeeping reactivateOrderForReview uses.
+    const orderCardRef = orderNotifyMessages[fullOrderId];
+    if (problemTickets[fullOrderId]) {
+        try { await bot.telegram.deleteMessage(problemTickets[fullOrderId].chatId, problemTickets[fullOrderId].messageId); } catch (e) {}
+    }
+    await resolveProblemTicket(fullOrderId, 'Resolved (Cancel/Refund)');
+
+    const refundAmount = targetOrder ? parseFloat(targetOrder.price || 0) : 0;
+    const currentBalance = await getFreshBalance(targetUserId);
+    const newBalance = currentBalance + refundAmount;
+    if (refundAmount > 0) {
+        await dbUpdateBalance(targetUserId, newBalance);
+    }
+
+    const groupCancelText =
+        `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
+        `----------------------------------------\n` +
+        `👤 <b>ដោះស្រាយដោយ ៖</b> ${resolvedByLabel}\n` +
+        `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
+        `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
+        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
+
+    if (orderCardRef) {
+        try {
+            await bot.telegram.editMessageText(orderCardRef.chatId, orderCardRef.messageId, undefined, groupCancelText, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: [] }
+            });
+        } catch (e) {}
+    }
+
+    const customerNotifyMsg =
+        `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវបានបោះបង់ និង វេរលុយសងវិញ (Order Canceled & Refunded)!</b>\n` +
+        `----------------------------------------\n` +
+        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
+        `📦 <b>Package:</b> ${targetOrder ? targetOrder.package_name : 'SMM Service'}\n` +
+        `💵 <b>ចំនួនលុយវេរជម្រះសងវិញ ៖</b> <b>+$${refundAmount.toFixed(2)} USD</b> 💸\n` +
+        `💰 <b>តុល្យភាពបច្ចុប្បន្ន ៖</b> <b>$${newBalance.toFixed(2)} USD</b>\n` +
+        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>\n\n` +
+        `💡 <i>ប្រាក់ត្រូវបានបញ្ចូលត្រឡប់ទៅក្នុងកាបូបលុយរបស់អ្នកវិញរួចរាល់ហើយ។</i>\n` +
+        `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}`;
+
+    try {
+        await bot.telegram.sendMessage(targetUserId, customerNotifyMsg, { parse_mode: 'HTML' });
+    } catch (e) {}
+
+    return { refunded: true, refundAmount, newBalance };
 }
 
 // ==========================================
@@ -2671,7 +2879,7 @@ bot.on('text', async (ctx, next) => {
             delete userState[userId];
             const { targetUserId, fullOrderId, packageName, targetLink } = state;
             await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, text, text);
-            await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, text);
+            await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, text, 'custom');
             return ctx.replyWithHTML(
                 `✅ <b>បានផ្ញើមូលហេតុទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`,
                 getAdminMainKeyboard()
@@ -5910,122 +6118,29 @@ bot.action(/^cancel_order_/, async (ctx) => {
     const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
     const adminName = ctx.from.first_name || 'Admin';
 
-    // Anti-double-click protection — also prevents a refund after the order
-    // was already marked Done (or a double refund from clicking twice).
-    // Only a single-process, in-memory guard, so it's wiped on every restart.
-    if (processedOrderActions.has(fullOrderId)) {
-        try {
-            return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
-        } catch (e) { return; }
-    }
-    processedOrderActions.add(fullOrderId);
-
-    // Database-level compare-and-swap as a second, independent guard against
-    // refunding (or completing) the same order twice — see the matching
-    // comment in done_order_ above. Critical here specifically: without it,
-    // a stale button surviving a redeploy could refund a customer's balance
-    // a second time with no backstop to catch it.
-    let targetOrder = null;
-    if (supabase) {
-        try {
-            const { data } = await supabase
-                .from('orders')
-                .update({ status: 'Canceled & Refunded' })
-                .or(`order_id.ilike.%${rawOrderId.replace('#', '')}%`)
-                .neq('status', 'Completed')
-                .neq('status', 'Canceled & Refunded')
-                .select();
-            if (!data || data.length === 0) {
-                try {
-                    return ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true });
-                } catch (e) { return; }
-            }
-            targetOrder = data[0];
-        } catch (e) {}
-    }
-
-    // If Admin is resolving this straight from its Problem-Solve ticket
-    // (escalated earlier via "❓ Other Reason"), delete that ticket message
-    // entirely instead of leaving a "canceled" banner behind — keeps
-    // Blessing.Kh_Problem_Solve showing only orders still needing action.
-    // A normal order card (no ticket) keeps the existing edit-in-place flow.
+    // Clear whichever message Admin actually clicked immediately, before
+    // the (possibly slower) Supabase round-trip inside refundOrder — same
+    // "delete if it's the tracked ticket, else just clear its buttons"
+    // distinction as before, purely for the clicked message's own UI;
+    // refundOrder handles the canonical ticket/card bookkeeping itself.
     const isTicketResolution = problemTickets[fullOrderId] &&
         problemTickets[fullOrderId].chatId === ctx.chat.id &&
         problemTickets[fullOrderId].messageId === ctx.callbackQuery.message.message_id;
-
-    // Captured BEFORE resolveProblemTicket clears it below — lets a ticket
-    // resolution still report the final status back on the original card in
-    // Purchase Order Group (which so far only shows the "➡️ moved" marker),
-    // so that group keeps a complete record even though Admin resolved the
-    // order from Blessing.Kh_Problem_Solve instead.
-    const orderCardRef = orderNotifyMessages[fullOrderId];
-
     if (isTicketResolution) {
         try { await ctx.deleteMessage(); } catch (e) {}
     } else {
         try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
     }
-    await resolveProblemTicket(fullOrderId, 'Resolved (Cancel/Refund)');
 
-    if (userOrdersCache[targetUserId]) {
-        const item = userOrdersCache[targetUserId].find(o => o.order_id.includes(rawOrderId.replace('#', '')));
-        if (item) {
-            item.status = 'Canceled & Refunded';
-            if (!targetOrder) targetOrder = item;
-        }
-    }
+    const result = await refundOrder(fullOrderId, targetUserId, adminName);
 
-    const refundAmount = targetOrder ? parseFloat(targetOrder.price || 0) : 0;
-    const currentBalance = await getFreshBalance(targetUserId);
-    const newBalance = currentBalance + refundAmount;
-
-    if (refundAmount > 0) {
-        await dbUpdateBalance(targetUserId, newBalance);
+    if (!result.refunded) {
+        try { await ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true }); } catch (e) {}
+        return;
     }
 
     try {
         await ctx.answerCbQuery('❌ បានបោះបង់ និង វេរលុយសងអតិថិជនវិញរួចរាល់!');
-    } catch (e) {}
-
-    const groupCancelText =
-        `❌ <b>បានបោះបង់ការបញ្ជាទិញ ${fullOrderId} និង វេរលុយសងវិញ!</b>\n` +
-        `----------------------------------------\n` +
-        `👤 <b>Admin ៖</b> ${adminName}\n` +
-        `💵 <b>Refunded Amount:</b> $${refundAmount.toFixed(2)} USD\n` +
-        `💰 <b>Customer New Balance:</b> $${newBalance.toFixed(2)} USD\n` +
-        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>`;
-
-    if (isTicketResolution) {
-        // Ticket message is already gone (deleted above) — report the same
-        // final status back on the original Purchase Order Group card.
-        if (orderCardRef) {
-            try {
-                await bot.telegram.editMessageText(orderCardRef.chatId, orderCardRef.messageId, undefined, groupCancelText, {
-                    parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [] }
-                });
-            } catch (e) {}
-        }
-    } else {
-        try {
-            await ctx.editMessageText(groupCancelText, { parse_mode: 'HTML' });
-        } catch (e) {}
-    }
-
-    // AUTOMATICALLY SEND REFUND NOTIFICATION TO CUSTOMER!
-    const customerNotifyMsg = 
-        `⚠️ <b>ការបញ្ជាទិញរបស់អ្នកត្រូវបានបោះបង់ និង វេរលុយសងវិញ (Order Canceled & Refunded)!</b>\n` +
-        `----------------------------------------\n` +
-        `🆔 <b>Order ID:</b> <code>${fullOrderId}</code>\n` +
-        `📦 <b>Package:</b> ${targetOrder ? targetOrder.package_name : 'SMM Service'}\n` +
-        `💵 <b>ចំនួនលុយវេរជម្រះសងវិញ ៖</b> <b>+$${refundAmount.toFixed(2)} USD</b> 💸\n` +
-        `💰 <b>តុល្យភាពបច្ចុប្បន្ន ៖</b> <b>$${newBalance.toFixed(2)} USD</b>\n` +
-        `🔴 <b>Status:</b> <b>Canceled & Refunded 💸</b>\n\n` +
-        `💡 <i>ប្រាក់ត្រូវបានបញ្ចូលត្រឡប់ទៅក្នុងកាបូបលុយរបស់អ្នកវិញរួចរាល់ហើយ។</i>\n` +
-        `📞 <b>Support Admin ៖</b> ${SUPPORT_LINK}`;
-
-    try {
-        await bot.telegram.sendMessage(targetUserId, customerNotifyMsg, { parse_mode: 'HTML' });
     } catch (e) {}
 });
 
@@ -6086,7 +6201,9 @@ bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) =
     }
 
     const { packageName, targetLink } = await lookupOrderInfo(rawOrderId, targetUserId);
-    if (preset.requiresNewLink) {
+    if (preset.requiresAgeOptions) {
+        await sendAgeOptionsMenu(targetUserId, fullOrderId, packageName);
+    } else if (preset.requiresNewLink) {
         await requestReplacementLink(targetUserId, fullOrderId, packageName, preset.km, preset.en);
     } else {
         await notifyCustomerOrderReason(targetUserId, fullOrderId, packageName, preset.km, preset.en, preset.extraNoteKm, preset.extraNoteEn);
@@ -6094,15 +6211,74 @@ bot.action(/^reason_(tiktok|private|wronglink|underage|deleted)_/, async (ctx) =
     if (preset.requiresPrivacyVideo) {
         await sendPrivacyTutorial(targetUserId, fullOrderId);
     }
-    await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, preset.km);
+    await postProblemTicket(fullOrderId, targetUserId, packageName, targetLink, preset.km, presetKey);
 
     try { await ctx.answerCbQuery('✅ បានផ្ញើមូលហេតុទៅភ្ញៀវ!'); } catch (e) {}
     try {
-        const confirmNote = preset.requiresNewLink
+        const confirmNote = preset.requiresAgeOptions
+            ? `✅ <b>បានផ្ញើជម្រើសដោះស្រាយបញ្ហាទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់! (រង់ចាំសម្រេចចិត្តក្នុងរយៈពេល 48 ម៉ោង)</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`
+            : preset.requiresNewLink
             ? `✅ <b>បានស្នើសុំ Link ថ្មីពីភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`
             : `✅ <b>បានផ្ញើមូលហេតុ "${preset.km}" ទៅភ្ញៀវ Order ${fullOrderId} រួចរាល់!</b>\n🎫 <i>Ticket ត្រូវបានផ្ញើទៅ Blessing.Kh_Problem_Solve។</i>`;
         await ctx.editMessageText(confirmNote, { parse_mode: 'HTML' });
     } catch (e) {}
+});
+
+// Customer taps one of the 4 buttons on the "🔞 Under 18" options menu (see
+// sendAgeOptionsMenu) — no admin check needed, these only ever reach the
+// customer they were sent to. Options 1/2 (new 18+ account vs. a friend's)
+// both just need a new compliant link, so they share the exact same
+// follow-up; option 3 self-service-refunds via the shared refundOrder
+// helper (their own money, no Admin approval needed).
+bot.action(/^underage_opt1_/, async (ctx) => {
+    const parts = ctx.callbackQuery.data.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+    const { packageName } = await lookupOrderInfo(rawOrderId, targetUserId);
+
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+
+    await requestReplacementLink(
+        targetUserId, fullOrderId, packageName,
+        'គណនីទាបជាងអាយុ 18 ឆ្នាំ — សូមប្រើគណនីថ្មីអាយុលើស 18 ឆ្នាំ',
+        'Account under 18 — please use a new 18+ account'
+    );
+});
+
+bot.action(/^underage_opt2_/, async (ctx) => {
+    const parts = ctx.callbackQuery.data.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+    const { packageName } = await lookupOrderInfo(rawOrderId, targetUserId);
+
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+
+    await requestReplacementLink(
+        targetUserId, fullOrderId, packageName,
+        'គណនីទាបជាងអាយុ 18 ឆ្នាំ — សូមផ្ញើ Link របស់មិត្តភក្តិ (អាយុលើស 18 ឆ្នាំ)',
+        "Account under 18 — please send a friend's 18+ account link instead"
+    );
+});
+
+bot.action(/^underage_opt3_/, async (ctx) => {
+    const parts = ctx.callbackQuery.data.split('_');
+    const targetUserId = parseInt(parts.pop());
+    const rawOrderId = parts.slice(2).join('_');
+    const fullOrderId = rawOrderId.startsWith('ORD-') ? `#${rawOrderId}` : `#ORD-${rawOrderId}`;
+
+    try { await ctx.editMessageReplyMarkup({ inline_keyboard: [] }); } catch (e) {}
+
+    const result = await refundOrder(fullOrderId, targetUserId, 'ភ្ញៀវផ្ទាល់ (ជ្រើសរើសរក្សាលុយក្នុង Wallet)');
+
+    if (!result.refunded) {
+        try { await ctx.answerCbQuery('⚠️ Order នេះត្រូវបានសម្រេចរួចហើយ!', { show_alert: true }); } catch (e) {}
+        return;
+    }
+    try { await ctx.answerCbQuery('✅ បានវេរលុយសងចូល Wallet របស់អ្នករួចរាល់!'); } catch (e) {}
 });
 
 // Customer taps [ ✅ ខ្ញុំបានធ្វើរួចរាល់ ] after watching the Privacy

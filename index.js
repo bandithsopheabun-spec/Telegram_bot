@@ -1344,7 +1344,7 @@ async function sendAgeOptionsMenu(targetUserId, fullOrderId, packageName) {
             `underage_opt2_${cleanOrderId}_${targetUserId}`
         )],
         [Markup.button.callback(
-            userLangCode === 'en' ? '3️⃣ Keep the money in my Wallet for later' : '3️⃣ រក្សាលុយក្នុង Wallet សម្រាប់ក្រោយ',
+            userLangCode === 'en' ? '3️⃣ Keep the money in my Wallet to order later' : '3️⃣ រក្សាលុយក្នុង Wallet ដើម្បីបញ្ជាទិញពេលក្រោយ',
             `underage_opt3_${cleanOrderId}_${targetUserId}`
         )],
         [Markup.button.url(

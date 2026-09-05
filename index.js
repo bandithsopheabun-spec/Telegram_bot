@@ -4546,6 +4546,36 @@ let bonusMinDeposit = 5.00; // Default: $5.00 minimum deposit
 let isBakongPaymentOn = true;
 let isInstantAutoDepositOn = true; // Mode 3: ABA PayWay Merchant Auto-Payment
 let depositMode = 'MANUAL'; // Default: Mode 1 - Manual Admin Approval ('MANUAL')
+
+// Restores depositMode after a redeploy — without this, every single
+// redeploy silently reset the payment mode back to MANUAL (Mode 1), even
+// if Admin had it set to e.g. KHQRCC (Mode 6) — confirmed as a real,
+// recurring problem given how often this project gets redeployed. Called
+// immediately after depositMode's own declaration (not nested inside
+// bootLoadAllConfigs further down) so it can safely reference depositMode
+// right where it's declared, avoiding the exact "referenced before its
+// own declaration executes at module-load time" trap that broke
+// registeredAdminIds earlier this session.
+async function rehydrateDepositMode() {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('bot_settings').select('value').eq('key', 'deposit_mode').maybeSingle();
+        if (error || !data || !data.value) return;
+        depositMode = data.value;
+        console.log('✅ Rehydrated depositMode from Supabase:', depositMode);
+    } catch (e) {
+        console.error('⚠️ rehydrateDepositMode error:', e.message);
+    }
+}
+rehydrateDepositMode().catch(() => {});
+
+function saveDepositMode(mode) {
+    if (!supabase) return;
+    supabase.from('bot_settings')
+        .upsert([{ key: 'deposit_mode', value: mode, updated_at: new Date().toISOString() }], { onConflict: 'key' })
+        .then(() => {})
+        .catch(e => console.error('⚠️ saveDepositMode error:', e.message));
+}
 let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
 let privacyTutorialVideoId = null; // Custom uploaded "make your account/link public" tutorial video file ID — sent alongside the "🔒 Private" Other Reason preset
@@ -4994,6 +5024,7 @@ bot.hears([/Deposit Mode/i, /💳 Mode:/i, /1. តម្រូវអនុម័
         depositMode = 'MANUAL';
         isInstantAutoDepositOn = false;
     }
+    saveDepositMode(depositMode);
 
     let modeTitle = '📋 1. តម្រូវអនុម័ត ( QR Code + 1-Click Approval in Admin Channel -1003953732694)';
     if (depositMode === 'AUTO') modeTitle = '⚡ 2. Auto Payments ( ACLEDA API Token Pending Notice Card )';

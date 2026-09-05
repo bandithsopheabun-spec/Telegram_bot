@@ -4147,6 +4147,14 @@ bot.action(/^send_bcast_(\d+)$/, async (ctx) => {
     if (!isAdmin(userId)) return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!');
     const msgId = parseInt(ctx.match[1]);
 
+    // Anti-double-click — a double-tap or a slow-network retry on this
+    // button would otherwise re-broadcast the same announcement to every
+    // user a second time, with nothing else here to stop it.
+    if (processedBroadcastIds.has(msgId)) {
+        try { return ctx.answerCbQuery('⚠️ សារនេះត្រូវបានផ្ញើរួចហើយ!', { show_alert: true }); } catch (e) { return; }
+    }
+    processedBroadcastIds.add(msgId);
+
     try {
         await ctx.answerCbQuery('🚀 កំពុងផ្ញើសារប្រកាសទៅកាន់អតិថិជនទាំងអស់...');
         await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
@@ -4592,6 +4600,12 @@ let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file I
 let privacyTutorialVideoId = null; // Custom uploaded "make your account/link public" tutorial video file ID — sent alongside the "🔒 Private" Other Reason preset
 const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
 const processedOrderActions = new Set(); // Prevents an order being Done AND Cancel/Refund'd (or either twice)
+// send_targeted_bcast_ is naturally double-click-safe (it deletes
+// pendingTargetedBroadcasts[msgId] synchronously before any await, so a
+// second click finds it already gone) — send_bcast_ (all-users broadcast)
+// has no equivalent consumed state, so a double-click/network retry could
+// otherwise re-send the same announcement to every user a second time.
+const processedBroadcastIds = new Set();
 // Tracks the original "NEW DEPOSIT SUBMITTED" notification (chat + message
 // id) for each depId, so a decision made from anywhere else — e.g. the
 // 📝 Pending Approvals listing, which is a *separate* message in the

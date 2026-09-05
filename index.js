@@ -1174,8 +1174,8 @@ const PRESET_ORDER_REASONS = {
     },
     private: {
         emoji: '🔒',
-        km: 'Link/គណនីជា Private (មិនអាចមើលឃើញ)',
-        en: 'Link/account is set to Private (not viewable)',
+        km: 'ការបូសរបស់បងត្រូវការអនុវត្តន៍តាមវីដេអូដែលបានផ្តល់ជូនបន្ថែម',
+        en: 'Your promotion requires following the additional video provided',
         // Reassures the customer their order isn't being rejected — the
         // video/account is already in, it just needs to be made viewable.
         extraNoteKm: '🎬 <i>វីដេអូ/គណនីរបស់អ្នកត្រូវបានទទួលរួចរាល់ — គ្រាន់តែរង់ចាំធ្វើតាមការណែនាំខាងក្រោមប៉ុណ្ណោះ!</i>',

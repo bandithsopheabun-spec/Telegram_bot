@@ -5140,10 +5140,27 @@ function buildReferralLink(userId) {
     return `https://t.me/${botUsername}?start=ref_${userId}`;
 }
 
+// SECURITY/CORRECTNESS: unlike 📢 Broadcast Message and 🎯 Broadcast to
+// User(s) (both send via copyMessage, which replays Telegram's own parsed
+// entities and never re-parses raw text as HTML), this announcement is
+// built as a raw string and sent with parse_mode: 'HTML' to every
+// recipient. Without escaping, one stray "&", "<", or ">" anywhere in
+// Admin's free-typed announcement text (e.g. a plain-text "<3" heart, or
+// "Deposit < $5") would make EVERY SINGLE send in the whole broadcast fail
+// with an "can't parse entities" error — all 435+ users would silently get
+// nothing, with no obvious reason why. Escaping the admin-typed portion
+// before injecting the {link} placeholder keeps it rendering as plain text
+// (exactly as Admin typed it) while guaranteeing the final HTML is always
+// valid.
+function escapeHtml(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function buildReferralAnnouncementFor(userId) {
     const link = buildReferralLink(userId);
-    const template = referralAnnouncementText || '';
-    if (!template) return `🔗 ${link}`;
+    const rawTemplate = referralAnnouncementText || '';
+    if (!rawTemplate) return `🔗 ${link}`;
+    const template = escapeHtml(rawTemplate);
     return template.includes('{link}') ? template.split('{link}').join(link) : `${template}\n\n🔗 ${link}`;
 }
 

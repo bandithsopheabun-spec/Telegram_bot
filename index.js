@@ -3396,6 +3396,42 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Deposit អប្បបរមាទៅជា $${referralMinDeposit.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminReferralKeyboard());
         }
 
+        if (state.step === 'AWAITING_ADMIN_CUSTOM_REPORT_DATE') {
+            delete userState[userId];
+            const range = parseAdminReportDateRange(text);
+            if (!range) {
+                return ctx.replyWithHTML(
+                    `❌ <b>Format កាលបរិច្ឆេទមិនត្រឹមត្រូវ!</b>\n\nសូមវាយម្តងទៀតជា ៖ <code>2026-09-11</code> ឬ <code>2026-09-01 to 2026-09-10</code>`,
+                    adminAnalyticsKeyboard
+                );
+            }
+            if (!supabase) {
+                return ctx.replyWithHTML('⚠️ <b>Database មិនត្រូវបានភ្ជាប់ទេ (Supabase not configured)។</b>', adminAnalyticsKeyboard);
+            }
+            try {
+                const { data, error } = await supabase
+                    .from('deposits')
+                    .select('amount, status, created_at')
+                    .gte('created_at', range.start.toISOString())
+                    .lte('created_at', range.end.toISOString());
+                if (error) throw error;
+
+                const successful = (data || []).filter(d => isSuccessfulDepositStatus(d.status));
+                const total = successful.reduce((acc, d) => acc + parseFloat(d.amount || 0), 0);
+
+                const msg =
+                    `📅 <b>Top-up Report — Custom Date</b>\n` +
+                    `----------------------------------------\n\n` +
+                    `🗓️ <b>កាលបរិច្ឆេទ ៖</b> ${range.label}\n` +
+                    `💸 <b>Total Top-up ៖</b> <b>$${total.toFixed(2)} USD</b>\n\n` +
+                    `<i>(${successful.length} successful deposit(s) counted — គិតជាម៉ោងកម្ពុជា)</i>`;
+                return ctx.replyWithHTML(msg, adminAnalyticsKeyboard);
+            } catch (e) {
+                console.error('⚠️ Custom top-up report query error:', e.message);
+                return ctx.replyWithHTML('⚠️ <b>មិនអាចទាញទិន្នន័យបានទេ (query error)។</b>', adminAnalyticsKeyboard);
+            }
+        }
+
         if (state.step === 'AWAITING_ADMIN_REFERRAL_ANNOUNCEMENT_TEXT') {
             delete userState[userId];
             referralAnnouncementText = text;
@@ -4613,6 +4649,50 @@ function isSuccessfulDepositStatus(status) {
     return !!status && (status.startsWith('Approved') || status === 'Completed');
 }
 
+// 📅 CUSTOM-DATE TOP-UP REPORT — Admin types a plain calendar date (or a
+// "date to date" range) and gets the exact total for that period, on top
+// of the fixed Today/Week/Month/3-Months/All-Time buckets above.
+//
+// Cambodia is UTC+7 but Render (where this runs) is UTC — so "2026-09-11"
+// as Admin means midnight-to-midnight in CAMBODIA time, not the server's
+// own UTC day. Computing the boundaries explicitly against UTC+7 here
+// (rather than via the server's local timezone, like the preset
+// Today/Week/Month figures above do) keeps a day Admin types matching the
+// day they actually mean, regardless of what timezone the server happens
+// to run in.
+const CAMBODIA_UTC_OFFSET_HOURS = 7;
+
+function cambodiaDateStringToUtcRange(dateStr) {
+    const m = dateStr.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    const y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+    const offsetMs = CAMBODIA_UTC_OFFSET_HOURS * 3600 * 1000;
+    const start = new Date(Date.UTC(y, mo - 1, d, 0, 0, 0, 0) - offsetMs);
+    const end = new Date(Date.UTC(y, mo - 1, d, 23, 59, 59, 999) - offsetMs);
+    if (isNaN(start.getTime())) return null;
+    return { start, end };
+}
+
+// Accepts a single date ("2026-09-11") or a range separated by "to", "-",
+// the Khmer "ដល់", or a comma ("2026-09-01 to 2026-09-10").
+function parseAdminReportDateRange(text) {
+    const parts = text.trim().split(/\s+(?:to|ដល់)\s+|\s*-\s*(?=\d{4}-)|\s*,\s*/i).map(s => s.trim()).filter(Boolean);
+    if (parts.length === 1) {
+        const r = cambodiaDateStringToUtcRange(parts[0]);
+        if (!r) return null;
+        return { start: r.start, end: r.end, label: parts[0] };
+    }
+    if (parts.length === 2) {
+        const r1 = cambodiaDateStringToUtcRange(parts[0]);
+        const r2 = cambodiaDateStringToUtcRange(parts[1]);
+        if (!r1 || !r2) return null;
+        const start = r1.start <= r2.start ? r1.start : r2.start;
+        const end = r1.end >= r2.end ? r1.end : r2.end;
+        return { start, end, label: `${parts[0]} → ${parts[1]}` };
+    }
+    return null;
+}
+
 bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
     const userId = ctx.from.id;
     if (!isAdmin(userId)) return;
@@ -4661,7 +4741,11 @@ bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
             `💰 <b>Total Top-up Since Bot Creation</b>\n💸 Total: <b>$${allTimeTotal.toFixed(2)}</b>\n\n` +
             `<i>(${successful.length} successful deposit(s) counted)</i>`;
 
-        ctx.replyWithHTML(reportsMsg, adminAnalyticsKeyboard);
+        const customDateKb = Markup.inlineKeyboard([
+            [Markup.button.callback('📅 កំណត់ថ្ងៃដោយខ្លួនឯង (Custom Date)', 'custom_topup_report')]
+        ]);
+
+        ctx.replyWithHTML(reportsMsg, { ...customDateKb, ...adminAnalyticsKeyboard });
     } catch (e) {
         console.error('⚠️ Top-up reports query error:', e.message);
         ctx.replyWithHTML(
@@ -4670,6 +4754,21 @@ bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
             adminAnalyticsKeyboard
         );
     }
+});
+
+// 📅 CUSTOM DATE TOP-UP REPORT — prompt
+bot.action('custom_topup_report', async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!');
+    try { await ctx.answerCbQuery(); } catch (e) {}
+
+    userState[userId] = { step: 'AWAITING_ADMIN_CUSTOM_REPORT_DATE' };
+    const prompt =
+        `📅 <b>សូមវាយបញ្ចូលកាលបរិច្ឆេទ ដើម្បីមើល Top-up Report ៖</b>\n\n` +
+        `• ១ថ្ងៃ ៖ <code>2026-09-11</code>\n` +
+        `• ចន្លោះកាលបរិច្ឆេទ ៖ <code>2026-09-01 to 2026-09-10</code>\n\n` +
+        `<i>(Format: YYYY-MM-DD — គិតជាម៉ោងកម្ពុជា)</i>`;
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
 });
 
 // 📋 DEPOSIT LOG & PANEL BALANCE

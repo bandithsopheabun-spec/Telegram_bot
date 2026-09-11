@@ -3372,6 +3372,13 @@ bot.on('text', async (ctx, next) => {
             return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Referral Bonus សម្រាប់មិត្តភ័ក្តិថ្មីទៅជា $${referralBonusReferred.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminReferralKeyboard());
         }
 
+        if (state.step === 'AWAITING_ADMIN_REFERRAL_ANNOUNCEMENT_TEXT') {
+            delete userState[userId];
+            referralAnnouncementText = text;
+            saveReferralAnnouncement();
+            return ctx.replyWithHTML(`✅ <b>បានរក្សាទុកអត្ថបទសារប្រកាស Referral រួចរាល់!</b>`, getAdminReferralAnnouncementKeyboard());
+        }
+
         if (state.step === 'AWAITING_ADMIN_EDIT_PRICE_INPUT') {
             const catId = state.catId || 'likes';
             let targetPkgName = '';
@@ -4340,6 +4347,14 @@ bot.on('photo', async (ctx) => {
         }
         return;
     }
+
+    if (isAdmin(userId) && state && state.step === 'AWAITING_ADMIN_REFERRAL_ANNOUNCEMENT_PHOTO') {
+        delete userState[userId];
+        const photo = ctx.message.photo[ctx.message.photo.length - 1];
+        referralAnnouncementPhotoId = photo.file_id;
+        saveReferralAnnouncement();
+        return ctx.replyWithHTML('✅ <b>បានកំណត់រូបភាពសម្រាប់សារប្រកាស Referral រួចរាល់!</b>', getAdminReferralAnnouncementKeyboard());
+    }
 });
 
 // CATCH VIDEO, AUDIO, VOICE, DOCUMENT, STICKER, VIDEO_NOTE FOR BROADCAST
@@ -5009,6 +5024,63 @@ function saveReferralSettings() {
 let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
 let privacyTutorialVideoId = null; // Custom uploaded "make your account/link public" tutorial video file ID — sent alongside the "🔒 Private" Other Reason preset
+
+// 🎁 REFERRAL ANNOUNCEMENT — a reusable, Admin-editable broadcast template
+// (text + optional photo) for promoting the Referral Program. Unlike the
+// generic "📢 Broadcast Message" above, which copies one byte-for-byte
+// identical message to everyone via copyMessage, sending THIS goes through
+// buildReferralAnnouncementFor() per recipient, which builds a version with
+// THAT user's own personal referral link stitched in. {link} anywhere in
+// the text controls exactly where it goes; if the placeholder isn't used,
+// the link is simply appended at the end so Admin doesn't have to remember
+// the syntax.
+let referralAnnouncementText = null;
+let referralAnnouncementPhotoId = null;
+let referralAnnouncementSendInProgress = false; // guards the actual send action against a double-tap
+
+async function rehydrateReferralAnnouncement() {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('bot_settings').select('value').eq('key', 'referral_announcement').maybeSingle();
+        if (error || !data || !data.value) return;
+        const parsed = JSON.parse(data.value);
+        referralAnnouncementText = parsed.text || null;
+        referralAnnouncementPhotoId = parsed.photoFileId || null;
+        console.log('✅ Rehydrated referral announcement template from Supabase');
+    } catch (e) {
+        console.error('⚠️ rehydrateReferralAnnouncement error:', e.message);
+    }
+}
+rehydrateReferralAnnouncement().catch(() => {});
+
+function saveReferralAnnouncement() {
+    if (!supabase) return;
+    const value = JSON.stringify({ text: referralAnnouncementText, photoFileId: referralAnnouncementPhotoId });
+    supabase.from('bot_settings')
+        .upsert([{ key: 'referral_announcement', value, updated_at: new Date().toISOString() }], { onConflict: 'key' })
+        .then(() => {})
+        .catch(e => console.error('⚠️ saveReferralAnnouncement error:', e.message));
+}
+
+function buildReferralAnnouncementFor(userId) {
+    const botUsername = (bot.botInfo && bot.botInfo.username) || 'BlessingKhV1_Bot';
+    const link = `https://t.me/${botUsername}?start=ref_${userId}`;
+    const template = referralAnnouncementText || '';
+    if (!template) return `🔗 ${link}`;
+    return template.includes('{link}') ? template.split('{link}').join(link) : `${template}\n\n🔗 ${link}`;
+}
+
+function getAdminReferralAnnouncementKeyboard() {
+    const photoRow = referralAnnouncementPhotoId
+        ? ['🖼️ · Change Photo', '🗑️ · Remove Photo']
+        : ['🖼️ · Add Photo'];
+    return Markup.keyboard([
+        ['✏️ · Edit Announcement Text'],
+        photoRow,
+        ['🚀 · Send Referral Announcement Now'],
+        ['🔐 Admin Menu']
+    ]).resize();
+}
 const processedDepositIds = new Set(); // Multi-layer anti-duplicate click protection set
 const processedOrderActions = new Set(); // Prevents an order being Done AND Cancel/Refund'd (or either twice)
 // send_targeted_bcast_ is naturally double-click-safe (it deletes
@@ -5129,7 +5201,7 @@ const adminToolsKeyboard = Markup.keyboard([
     ['🎥 · Start media', '🎥 · How to links'],
     ['🔒 · Privacy Tutorial Video'],
     ['🏷️ · Services & Prices', '📢 · Broadcast Message'],
-    ['🎯 · Broadcast to User(s)'],
+    ['🎯 · Broadcast to User(s)', '🎁 · Referral Announcement'],
     ['🔐 Admin Menu']
 ]).resize();
 
@@ -5956,6 +6028,139 @@ bot.hears(['🎯 · Broadcast to User(s)', 'Broadcast to User(s)'], (ctx) => {
         `• ច្រើននាក់ ៖ <code>521984577, 527660257, 7485372237</code> (ខណ្ឌដោយក្បៀស)`,
         Markup.keyboard([['🔐 Admin Menu']]).resize()
     );
+});
+
+// 🎁 REFERRAL ANNOUNCEMENT — entry point
+bot.hears(['🎁 · Referral Announcement', 'Referral Announcement'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const bodyText = referralAnnouncementText
+        ? `----------------------------------------\n${buildReferralAnnouncementFor(userId)}\n----------------------------------------`
+        : `<i>មិនទាន់មានខ្លឹមសារទេ — សូមចុច "✏️ Edit Announcement Text" ខាងក្រោមជាមុនសិន។</i>`;
+
+    const msg =
+        `🎁 ━━━━━━━ [ <b>REFERRAL ANNOUNCEMENT</b> ] ━━━━━━━ 🎁\n\n` +
+        `សារនេះនឹងផ្ញើទៅភ្ញៀវទាំងអស់ ដោយភ្ជាប់ Link ណែនាំផ្ទាល់ខ្លួនរបស់អ្នកនីមួយៗដោយស្វ័យប្រវត្តិ (មិនដូច 📢 Broadcast Message ធម្មតាទេ ព្រោះ Link ខុសគ្នាសម្រាប់អតិថិជននីមួយៗ) ៖\n\n` +
+        `👁️ <b>គំរូ (ជាមួយ Link របស់អ្នកផ្ទាល់ជាឧទាហរណ៍) ៖</b>\n${bodyText}\n\n` +
+        `🖼️ <b>រូបភាព ៖</b> ${referralAnnouncementPhotoId ? '✅ បានកំណត់' : '❌ គ្មាន'}`;
+
+    if (referralAnnouncementPhotoId) {
+        return ctx.replyWithPhoto(referralAnnouncementPhotoId, { caption: msg, parse_mode: 'HTML', ...getAdminReferralAnnouncementKeyboard() });
+    }
+    return ctx.replyWithHTML(msg, getAdminReferralAnnouncementKeyboard());
+});
+
+// ✏️ EDIT REFERRAL ANNOUNCEMENT TEXT
+bot.hears(['✏️ · Edit Announcement Text', 'Edit Announcement Text'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_REFERRAL_ANNOUNCEMENT_TEXT' };
+    const prompt =
+        `🎁 <b>សូមវាយបញ្ចូលអត្ថបទសារប្រកាស Referral ៖</b>\n\n` +
+        `💡 <i>អាចប្រើ</i> <code>{link}</code> <i>កន្លែងណាមួយក្នុងសារ ដើម្បីដាក់ Link ណែនាំចូល — បើមិនប្រើ Placeholder នេះ Link នឹងត្រូវបានបន្ថែមទៅខាងចុងសារឲ្យស្វ័យប្រវត្តិ។</i>`;
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🖼️ ADD/CHANGE REFERRAL ANNOUNCEMENT PHOTO
+bot.hears(['🖼️ · Add Photo', '🖼️ · Change Photo', 'Add Photo', 'Change Photo'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_REFERRAL_ANNOUNCEMENT_PHOTO' };
+    ctx.replyWithHTML(`🖼️ <b>សូមផ្ញើរូបភាពដែលចង់ភ្ជាប់ជាមួយសារប្រកាស Referral ៖</b>`, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 🗑️ REMOVE REFERRAL ANNOUNCEMENT PHOTO
+bot.hears(['🗑️ · Remove Photo', 'Remove Photo'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    referralAnnouncementPhotoId = null;
+    saveReferralAnnouncement();
+    ctx.replyWithHTML('✅ <b>បានលុបរូបភាពសារប្រកាស Referral រួចរាល់!</b>', getAdminReferralAnnouncementKeyboard());
+});
+
+// 🚀 SEND REFERRAL ANNOUNCEMENT — confirmation step
+bot.hears(['🚀 · Send Referral Announcement Now', 'Send Referral Announcement Now'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    if (!referralAnnouncementText && !referralAnnouncementPhotoId) {
+        return ctx.replyWithHTML('❌ <b>មិនទាន់មានខ្លឹមសារទេ — សូមកែសម្រួល "✏️ Edit Announcement Text" ជាមុនសិន។</b>', getAdminReferralAnnouncementKeyboard());
+    }
+
+    const usersList = await getAllBroadcastUsers();
+    const preview = buildReferralAnnouncementFor(userId);
+    const confirmMsg =
+        `👁️ <b>មើលគំរូជាមុន (Link ខាងក្រោមជា Link របស់អ្នកផ្ទាល់ សម្រាប់តែជាឧទាហរណ៍) ៖</b>\n` +
+        `----------------------------------------\n${preview}\n----------------------------------------\n\n` +
+        `⚠️ <b>សារនេះនឹងផ្ញើទៅ ${usersList.length} Users ដោយ Link ត្រូវបានប្តូរទៅជាផ្ទាល់ខ្លួនសម្រាប់អ្នកនីមួយៗ។ បន្តទេ?</b>`;
+
+    const confirmKb = Markup.inlineKeyboard([
+        [Markup.button.callback('🚀 បញ្ជាក់ផ្ញើ (Confirm Send)', 'confirm_ref_announcement')],
+        [Markup.button.callback('❌ បោះបង់ (Cancel)', 'cancel_ref_announcement')]
+    ]);
+
+    if (referralAnnouncementPhotoId) {
+        return ctx.replyWithPhoto(referralAnnouncementPhotoId, { caption: confirmMsg, parse_mode: 'HTML', ...confirmKb });
+    }
+    return ctx.replyWithHTML(confirmMsg, confirmKb);
+});
+
+bot.action('cancel_ref_announcement', async (ctx) => {
+    try {
+        await ctx.answerCbQuery('❌ បានបោះបង់');
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+});
+
+// 🚀 SEND REFERRAL ANNOUNCEMENT — actual execution, one personalized
+// message per recipient (never copyMessage, since every recipient needs a
+// DIFFERENT referral link stitched into otherwise-identical content).
+bot.action('confirm_ref_announcement', async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return ctx.answerCbQuery('⛔ សម្រាប់តែ Admin!');
+
+    // Anti-double-click — a double-tap here would otherwise re-send this
+    // announcement to every user a second time.
+    if (referralAnnouncementSendInProgress) {
+        try { return ctx.answerCbQuery('⚠️ កំពុងផ្ញើរួចហើយ សូមរង់ចាំ!', { show_alert: true }); } catch (e) { return; }
+    }
+    referralAnnouncementSendInProgress = true;
+
+    try {
+        await ctx.answerCbQuery('🚀 កំពុងផ្ញើសារប្រកាស Referral ទៅកាន់អតិថិជនទាំងអស់...');
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    } catch (e) {}
+
+    const usersList = await getAllBroadcastUsers();
+    await ctx.replyWithHTML(`⏳ <b>កំពុងផ្ញើសារប្រកាស Referral ទៅកាន់ ${usersList.length} Users (Link ខុសគ្នាសម្រាប់អ្នកនីមួយៗ)...</b>`);
+
+    let success = 0;
+    let failed = 0;
+    for (const uId of usersList) {
+        try {
+            const text = buildReferralAnnouncementFor(uId);
+            if (referralAnnouncementPhotoId) {
+                await bot.telegram.sendPhoto(uId, referralAnnouncementPhotoId, { caption: text, parse_mode: 'HTML' });
+            } else {
+                await bot.telegram.sendMessage(uId, text, { parse_mode: 'HTML' });
+            }
+            success++;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    referralAnnouncementSendInProgress = false;
+
+    const reportMsg =
+        `✅ <b>បានផ្ញើសារប្រកាស Referral ជោគជ័យ! (Referral Announcement Complete)</b>\n` +
+        `----------------------------------------\n\n` +
+        `🟢 <b>ជោគជ័យ ៖</b> <b>${success} Users</b>\n` +
+        `🔴 <b>បរាជ័យ (Block Bot) ៖</b> <b>${failed} Users</b>`;
+
+    return ctx.replyWithHTML(reportMsg, adminToolsKeyboard);
 });
 
 // 🟢 BOT OPEN / 🔴 MAINTENANCE TOGGLE

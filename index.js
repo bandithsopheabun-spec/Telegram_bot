@@ -5062,9 +5062,13 @@ function saveReferralAnnouncement() {
         .catch(e => console.error('⚠️ saveReferralAnnouncement error:', e.message));
 }
 
-function buildReferralAnnouncementFor(userId) {
+function buildReferralLink(userId) {
     const botUsername = (bot.botInfo && bot.botInfo.username) || 'BlessingKhV1_Bot';
-    const link = `https://t.me/${botUsername}?start=ref_${userId}`;
+    return `https://t.me/${botUsername}?start=ref_${userId}`;
+}
+
+function buildReferralAnnouncementFor(userId) {
+    const link = buildReferralLink(userId);
     const template = referralAnnouncementText || '';
     if (!template) return `🔗 ${link}`;
     return template.includes('{link}') ? template.split('{link}').join(link) : `${template}\n\n🔗 ${link}`;
@@ -6091,10 +6095,24 @@ bot.hears(['🚀 · Send Referral Announcement Now', 'Send Referral Announcement
 
     const usersList = await getAllBroadcastUsers();
     const preview = buildReferralAnnouncementFor(userId);
+
+    // Prove the personalization concretely instead of only claiming it in
+    // words — show a second REAL user's rendered Link right next to
+    // Admin's own, so Admin can see with their own eyes that every
+    // recipient below gets a DIFFERENT link, never Admin's link repeated.
+    const otherSampleId = usersList.find(id => String(id) !== String(userId));
+    const proofNote = otherSampleId
+        ? `\n\n🔍 <b>ភស្តុតាង៖ Link ខុសគ្នាសម្រាប់ User ខុសគ្នា ៖</b>\n` +
+          `👤 <b>Link របស់អ្នក (Admin, ID <code>${userId}</code>) ៖</b>\n<code>${buildReferralLink(userId)}</code>\n\n` +
+          `👤 <b>Link របស់ User ID <code>${otherSampleId}</code> (ជាឧទាហរណ៍) ៖</b>\n<code>${buildReferralLink(otherSampleId)}</code>\n\n` +
+          `➡️ <i>ដូចបងឃើញ Link ខុសគ្នា — User ជាក់ស្តែងគ្រប់រូបខាងក្រោម នឹងទទួលបានតែ Link ផ្ទាល់ខ្លួនរបស់គេ ១ ប៉ុណ្ណោះ មិនមែន Link របស់ Admin ទេ។</i>`
+        : '';
+
     const confirmMsg =
-        `👁️ <b>មើលគំរូជាមុន (Link ខាងក្រោមជា Link របស់អ្នកផ្ទាល់ សម្រាប់តែជាឧទាហរណ៍) ៖</b>\n` +
-        `----------------------------------------\n${preview}\n----------------------------------------\n\n` +
-        `⚠️ <b>សារនេះនឹងផ្ញើទៅ ${usersList.length} Users ដោយ Link ត្រូវបានប្តូរទៅជាផ្ទាល់ខ្លួនសម្រាប់អ្នកនីមួយៗ។ បន្តទេ?</b>`;
+        `👁️ <b>មើលគំរូជាមុន (ខ្លឹមសារពេញលេញ ប្រើ Admin ID ជាតំណាង) ៖</b>\n` +
+        `----------------------------------------\n${preview}\n----------------------------------------` +
+        proofNote + `\n\n` +
+        `⚠️ <b>សារនេះនឹងផ្ញើទៅ ${usersList.length} Users ដោយ Link ត្រូវបានប្តូរទៅជាផ្ទាល់ខ្លួនស្វ័យប្រវត្តិសម្រាប់អ្នកនីមួយៗ (មិនមែន Link ដូចគ្នាទាំងអស់ទេ)។ បន្តទេ?</b>`;
 
     const confirmKb = Markup.inlineKeyboard([
         [Markup.button.callback('🚀 បញ្ជាក់ផ្ញើ (Confirm Send)', 'confirm_ref_announcement')],

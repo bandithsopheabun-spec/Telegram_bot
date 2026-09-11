@@ -5270,7 +5270,13 @@ function buildReferralHowToText() {
 }
 
 function buildReferralAnnouncementFor(userId) {
-    const link = buildReferralLink(userId);
+    // Wrapped in <code> (not a raw/auto-linked URL) so tapping the link in
+    // Telegram COPIES it to the clipboard instead of opening/navigating —
+    // matches the tap-to-copy pattern already used on the 👤 Account &
+    // Profile -> 🎗️ Refer a Friend screen. The whole point of this link is
+    // to be copied and forwarded to a friend, not opened by the recipient
+    // themselves.
+    const link = `<code>${buildReferralLink(userId)}</code>`;
     const howTo = buildReferralHowToText();
     const rawTemplate = referralAnnouncementText || '';
     if (!rawTemplate) return `🔗 ${link}\n\n${howTo}`;
@@ -6259,7 +6265,7 @@ bot.hears(['🎁 · Referral Announcement', 'Referral Announcement'], (ctx) => {
     if (referralAnnouncementPhotoId) {
         return ctx.replyWithPhoto(referralAnnouncementPhotoId, { caption: msg, parse_mode: 'HTML', ...getAdminReferralAnnouncementKeyboard() });
     }
-    return ctx.replyWithHTML(msg, getAdminReferralAnnouncementKeyboard());
+    return ctx.replyWithHTML(msg, { disable_web_page_preview: true, ...getAdminReferralAnnouncementKeyboard() });
 });
 
 // ✏️ EDIT REFERRAL ANNOUNCEMENT TEXT
@@ -6328,7 +6334,7 @@ bot.hears(['🚀 · Send Referral Announcement Now', 'Send Referral Announcement
     if (referralAnnouncementPhotoId) {
         return ctx.replyWithPhoto(referralAnnouncementPhotoId, { caption: confirmMsg, parse_mode: 'HTML', ...confirmKb });
     }
-    return ctx.replyWithHTML(confirmMsg, confirmKb);
+    return ctx.replyWithHTML(confirmMsg, { disable_web_page_preview: true, ...confirmKb });
 });
 
 bot.action('cancel_ref_announcement', async (ctx) => {
@@ -6368,7 +6374,7 @@ bot.action('confirm_ref_announcement', async (ctx) => {
             if (referralAnnouncementPhotoId) {
                 await bot.telegram.sendPhoto(uId, referralAnnouncementPhotoId, { caption: text, parse_mode: 'HTML' });
             } else {
-                await bot.telegram.sendMessage(uId, text, { parse_mode: 'HTML' });
+                await bot.telegram.sendMessage(uId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
             }
             success++;
         } catch (e) {

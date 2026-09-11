@@ -2370,7 +2370,12 @@ async function sendHowToOrderGuide(ctx) {
         [Markup.button.url(lang === 'km' ? `📢 ចូលរួម ${BRAND_NAME}_Public ( ទទួលប្រូម៉ូសិន 🎁 ) ↗️` : `📢 Join ${BRAND_NAME}_Public Channel 🎁 ↗️`, activeHowtoLink)]
     ]);
 
-    await ctx.replyWithHTML(guideText, { ...videoButtonKb, ...mainKb });
+    // See sendWelcomeMessage below for the full explanation — combining an
+    // inline keyboard with a reply keyboard via spread silently drops the
+    // inline one (both use the same reply_markup key). mainKb is already
+    // showing from earlier navigation (this screen is only reached from
+    // inside the main menu), so it doesn't need resending here.
+    await ctx.replyWithHTML(guideText, videoButtonKb);
 }
 
 // 1-Click Action for How to Order Video Guide
@@ -2448,7 +2453,22 @@ async function sendWelcomeMessage(ctx) {
         }
     }
 
-    return ctx.replyWithHTML(welcomeText, { disable_web_page_preview: true, ...welcomeButtons, ...mainKb });
+    // BUG (found live): Telegram's reply_markup can only ever be ONE
+    // keyboard type per message — an inline keyboard OR a reply (bottom)
+    // keyboard, never both in a single sendMessage call. Combining
+    // welcomeButtons (inline) and mainKb (reply) via object spread let
+    // mainKb's reply_markup silently clobber welcomeButtons' entirely,
+    // since both objects use that same top-level key — real customers
+    // landing here (whenever no welcome video is configured) never saw the
+    // How to Use / Website Portal / Contact Admin buttons. Splitting into
+    // two messages — content+inline buttons, then a short prompt+reply
+    // keyboard — mirrors exactly what the video branch above already does
+    // correctly, and is the only way to deliver both keyboard types here.
+    await ctx.replyWithHTML(welcomeText, { disable_web_page_preview: true, ...welcomeButtons });
+    return ctx.replyWithHTML(
+        lang === 'km' ? '👇 <i>សូមជ្រើសរើសមេនុយខាងក្រោមដើម្បីចាប់ផ្តើម ៖</i>' : '👇 <i>Select from the menu below:</i>',
+        mainKb
+    );
 }
 
 // SET KHMER LANGUAGE (🇰🇭 Khmer (kh))
@@ -2618,7 +2638,16 @@ bot.hears(['💬 Support & Admin', 'Support & Admin', '💬 ជំនួយ Supp
         [Markup.button.url(lang === 'km' ? '💬 ទាក់ទង Admin Support ( 7ព្រឹក-10យប់ ⚡ ) ↗️' : '💬 Contact Admin Support (7AM-10PM) ⚡ ↗️', 'https://t.me/Blessing_Kh_Supports')]
     ]);
 
-    ctx.replyWithHTML(supportMsg, { disable_web_page_preview: true, ...channelInlineKb, ...getMainKeyboard(lang) });
+    // BUG (found live, part of a systemic pattern across this file):
+    // Telegram's reply_markup can only ever be ONE keyboard type per
+    // message. Spreading an inline keyboard object together with a reply
+    // (bottom) keyboard object — both use the same top-level reply_markup
+    // key — let the LATER one silently clobber the earlier one, so
+    // channelInlineKb's buttons never actually reached Telegram. Sending
+    // only the inline keyboard here is correct: the main reply keyboard is
+    // already visible from earlier navigation and stays up regardless
+    // (Telegram reply keyboards are chat-level, not per-message).
+    ctx.replyWithHTML(supportMsg, { disable_web_page_preview: true, ...channelInlineKb });
 });
 
 // 🎵 TIKTOK SERVICES (CATEGORIES & PLATFORMS)
@@ -2715,7 +2744,10 @@ async function sendMyOrdersHistory(ctx) {
             ]
         ]);
 
-        return ctx.replyWithHTML(headerText + itemsText, { disable_web_page_preview: true, ...orderHistoryKb, ...getMainKeyboard(lang) });
+        // See the Support & Admin screen above for why this spreads ONLY
+        // orderHistoryKb — a second reply_markup source here would silently
+        // clobber these inline buttons entirely.
+        return ctx.replyWithHTML(headerText + itemsText, { disable_web_page_preview: true, ...orderHistoryKb });
     }
 
     // EMPTY ORDER HISTORY CARD
@@ -2734,7 +2766,7 @@ async function sendMyOrdersHistory(ctx) {
         ]
     ]);
 
-    return ctx.replyWithHTML(emptyText, { disable_web_page_preview: true, ...emptyKb, ...getMainKeyboard(lang) });
+    return ctx.replyWithHTML(emptyText, { disable_web_page_preview: true, ...emptyKb });
 }
 
 bot.hears(['📅 ប្រវត្តិទិញ', '📅 ការបញ្ជាទិញរបស់ខ្ញុំ', '📅 Order History', '📅 My Orders', 'ប្រវត្តិទិញ', 'ការបញ្ជាទិញរបស់ខ្ញុំ', 'Order History', 'My Orders'], async (ctx) => {
@@ -2810,7 +2842,7 @@ async function sendTopBuyersLeaderboard(ctx) {
             `🏆 ━━━━━━━ [ <b>TOP 10 BUYERS LEADERBOARD</b> ] ━━━━━━━ 🏆\n\n` +
             `👑 No purchases yet to build a leaderboard.\n` +
             `Be the first buyer to claim the #1 spot! 🚀`;
-        return ctx.replyWithHTML(emptyMsg, { disable_web_page_preview: true, ...websiteKb, ...getMainKeyboard(lang) });
+        return ctx.replyWithHTML(emptyMsg, { disable_web_page_preview: true, ...websiteKb });
     }
 
     const titleText = lang === 'km' ?
@@ -2836,7 +2868,7 @@ async function sendTopBuyersLeaderboard(ctx) {
         `\n\n----------------------------------------\n` +
         `✨ <i>Thank you to all our VIP members for trusting ${BRAND_NAME_UPPER}! 💖</i>`;
 
-    return ctx.replyWithHTML(titleText + itemsText + footerText, { disable_web_page_preview: true, ...websiteKb, ...getMainKeyboard(lang) });
+    return ctx.replyWithHTML(titleText + itemsText + footerText, { disable_web_page_preview: true, ...websiteKb });
 }
 
 bot.hears(['🔝 កំពូលអ្នកទិញ', '🔝 Top Buyers', 'កំពូលអ្នកទិញ', 'Top Buyers'], async (ctx) => {
@@ -3712,7 +3744,7 @@ bot.on('text', async (ctx, next) => {
                     ]
                 ]);
 
-                return ctx.replyWithHTML(orderCard, { disable_web_page_preview: true, ...orderKb, ...getMainKeyboard(lang) });
+                return ctx.replyWithHTML(orderCard, { disable_web_page_preview: true, ...orderKb });
             } else {
                 const notFoundMsg = lang === 'km' ?
                     `❌ ━━━━━━━ [ <b>ORDER NOT FOUND</b> ] ━━━━━━━ ❌\n\n` +
@@ -3730,7 +3762,7 @@ bot.on('text', async (ctx, next) => {
                     ]
                 ]);
 
-                return ctx.replyWithHTML(notFoundMsg, { disable_web_page_preview: true, ...notFoundKb, ...getMainKeyboard(lang) });
+                return ctx.replyWithHTML(notFoundMsg, { disable_web_page_preview: true, ...notFoundKb });
             }
         }
     }
@@ -4741,11 +4773,24 @@ bot.hears(['📈 · Top-up reports', 'Top-up reports'], async (ctx) => {
             `💰 <b>Total Top-up Since Bot Creation</b>\n💸 Total: <b>$${allTimeTotal.toFixed(2)}</b>\n\n` +
             `<i>(${successful.length} successful deposit(s) counted)</i>`;
 
+        // BUG (found live): Telegram's reply_markup field can only ever be
+        // ONE keyboard type per message — an inline keyboard OR a reply
+        // (bottom) keyboard, never both. `{ ...customDateKb, ...adminAnalyticsKeyboard }`
+        // silently let adminAnalyticsKeyboard's reply_markup clobber
+        // customDateKb's, since both objects use that same top-level key —
+        // the inline "Custom Date" button was built correctly but never
+        // actually reached Telegram. Sending ONLY the inline keyboard here
+        // is correct: the bottom Analytics keyboard is already visible from
+        // when Admin navigated into this section and stays up regardless
+        // (Telegram reply keyboards are chat-level, not per-message) — this
+        // mirrors how the rest of this file already attaches an inline
+        // keyboard to one message while a reply keyboard shown earlier
+        // stays live (e.g. the broadcast preview flow further down).
         const customDateKb = Markup.inlineKeyboard([
             [Markup.button.callback('📅 កំណត់ថ្ងៃដោយខ្លួនឯង (Custom Date)', 'custom_topup_report')]
         ]);
 
-        ctx.replyWithHTML(reportsMsg, { ...customDateKb, ...adminAnalyticsKeyboard });
+        ctx.replyWithHTML(reportsMsg, customDateKb);
     } catch (e) {
         console.error('⚠️ Top-up reports query error:', e.message);
         ctx.replyWithHTML(
@@ -6055,7 +6100,7 @@ bot.hears(['🏷️ · Services & Prices', 'Services & Prices', '🏷️ · ក�
         [Markup.button.callback('🔴 C. កែប្រែតម្លៃ Followers Khmer (Cat C)', 'edit_price_followers')]
     ]);
 
-    ctx.replyWithHTML(catalogMsg, { ...serviceAdminKb, ...adminToolsKeyboard });
+    ctx.replyWithHTML(catalogMsg, serviceAdminKb);
 });
 
 // Helper: Render full category packages card for Admin inspection
@@ -6091,7 +6136,7 @@ function sendAdminCategoryPackagesCard(ctx, catId) {
         [Markup.button.callback('❌ បោះបង់ (Cancel / Back)', 'cancel_admin_edit')]
     ]);
 
-    ctx.replyWithHTML(cardText, { ...actionKb, ...adminToolsKeyboard });
+    ctx.replyWithHTML(cardText, actionKb);
 }
 
 bot.action('edit_price_followers', (ctx) => {

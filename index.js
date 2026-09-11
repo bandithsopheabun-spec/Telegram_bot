@@ -804,7 +804,7 @@ async function autoCreditDeposit(depId, item) {
         await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, channelMsg, { parse_mode: 'HTML' });
     } catch (e) {}
 
-    await awardReferralBonusIfDue(userId);
+    await awardReferralBonusIfDue(userId, item.amount);
 }
 
 // 🎗️ REFERRAL PROGRAM — shared bonus-payout helper, called after every
@@ -822,7 +822,18 @@ async function autoCreditDeposit(depId, item) {
 // module evaluation (and therefore those declarations) has completed —
 // never at module-load time itself. Same reasoning already used for
 // publicChannelId elsewhere in this file.
-async function awardReferralBonusIfDue(referredUserId) {
+async function awardReferralBonusIfDue(referredUserId, depositAmount) {
+    // Terms: the bonus only qualifies once the referred friend's deposit
+    // reaches referralMinDeposit — checked BEFORE the compare-and-swap
+    // below (same reasoning as the referrerAmount/referredAmount check
+    // further down: the swap is a ONE-TIME flag flip). A too-small deposit
+    // simply leaves bonus_paid untouched, so a LATER, qualifying deposit
+    // from the same referred friend can still trigger it — this isn't
+    // strictly "their first deposit ever", it's their first QUALIFYING
+    // one. Without this, a referred account could deposit a trivial amount
+    // (e.g. $0.01) purely to farm a bigger bonus.
+    if (typeof depositAmount === 'number' && depositAmount < referralMinDeposit) return;
+
     // Resolve what would ACTUALLY get paid under the CURRENT mode/amounts
     // before touching the database — e.g. if Admin set a referred-friend
     // amount but left Reward Mode on "Referrer Only" (or left the referrer
@@ -2537,8 +2548,8 @@ bot.action('profile_referral', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch (e) {}
     const userId = ctx.from.id;
     const lang = getLang(userId);
-    const botUsername = (bot.botInfo && bot.botInfo.username) || 'BlessingKhV1_Bot';
-    const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+    const referralLink = buildReferralLink(userId);
+    const termsText = buildReferralTermsText(lang);
 
     let referredCount = 0;
     let bonusEarned = 0;
@@ -2556,12 +2567,14 @@ bot.action('profile_referral', async (ctx) => {
           `ចែក Link ខាងក្រោមទៅមិត្តភ័ក្តិ! នៅពេលគាត់ចុះឈ្មោះ ហើយបញ្ចូលប្រាក់ដំបូងគេ អ្នកនឹងទទួលបាន Bonus ចូល Wallet ភ្លាមៗ! 🎉\n\n` +
           `🔗 <b>Link ណែនាំរបស់អ្នក ៖</b>\n<code>${referralLink}</code>\n\n` +
           `👥 <b>ចំនួនមិត្តភ័ក្តិបានណែនាំ ៖</b> ${referredCount}\n` +
-          `💰 <b>Bonus ទទួលបានសរុប ៖</b> $${bonusEarned.toFixed(2)} USD`
+          `💰 <b>Bonus ទទួលបានសរុប ៖</b> $${bonusEarned.toFixed(2)} USD\n\n` +
+          `----------------------------------------\n${termsText}`
         : `🎗️ <b>Referral Program</b>\n----------------------------------------\n\n` +
           `Share your link below! When a friend joins and makes their first deposit, you get a bonus in your Wallet instantly! 🎉\n\n` +
           `🔗 <b>Your Referral Link:</b>\n<code>${referralLink}</code>\n\n` +
           `👥 <b>Friends Referred:</b> ${referredCount}\n` +
-          `💰 <b>Total Bonus Earned:</b> $${bonusEarned.toFixed(2)} USD`;
+          `💰 <b>Total Bonus Earned:</b> $${bonusEarned.toFixed(2)} USD\n\n` +
+          `----------------------------------------\n${termsText}`;
 
     return ctx.replyWithHTML(msg, { disable_web_page_preview: true });
 });
@@ -3370,6 +3383,17 @@ bot.on('text', async (ctx, next) => {
             referralBonusReferred = val;
             saveReferralSettings();
             return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Referral Bonus សម្រាប់មិត្តភ័ក្តិថ្មីទៅជា $${referralBonusReferred.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminReferralKeyboard());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_REFERRAL_MIN_DEPOSIT') {
+            delete userState[userId];
+            const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+            if (isNaN(val) || val < 0) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>', getAdminReferralKeyboard());
+            }
+            referralMinDeposit = val;
+            saveReferralSettings();
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Deposit អប្បបរមាទៅជា $${referralMinDeposit.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminReferralKeyboard());
         }
 
         if (state.step === 'AWAITING_ADMIN_REFERRAL_ANNOUNCEMENT_TEXT') {
@@ -4779,11 +4803,14 @@ bot.hears(['🎗️ Referral Program', 'Referral Program'], (ctx) => {
 
     const msg =
         `🎗️ ━━━━━━━ [ <b>REFERRAL PROGRAM</b> ] ━━━━━━━ 🎗️\n\n` +
-        `Users share a personal link (from 👤 Account & Profile); when the friend they invite makes their FIRST deposit, the bonus is paid instantly ៖\n\n` +
+        `Users share a personal link (from 👤 Account & Profile); when the friend they invite makes their FIRST QUALIFYING deposit, the bonus is paid instantly ៖\n\n` +
         `• <b>Status:</b> ${statusStr}\n` +
         `• <b>Reward Mode:</b> ${modeStr}\n` +
         `• <b>Referrer Bonus:</b> <b>$${referralBonusReferrer.toFixed(2)} USD</b>\n` +
-        `• <b>Referred Friend Bonus:</b> <b>$${referralBonusReferred.toFixed(2)} USD</b>${referralRewardMode === 'REFERRER_ONLY' ? ' <i>(not paid — mode is Referrer Only)</i>' : ''}`;
+        `• <b>Referred Friend Bonus:</b> <b>$${referralBonusReferred.toFixed(2)} USD</b>${referralRewardMode === 'REFERRER_ONLY' ? ' <i>(not paid — mode is Referrer Only)</i>' : ''}\n` +
+        `• <b>Min Qualifying Deposit:</b> <b>$${referralMinDeposit.toFixed(2)} USD</b>${referralMinDeposit <= 0 ? ' <i>(no minimum — any deposit amount qualifies)</i>' : ''}\n\n` +
+        `----------------------------------------\n` +
+        `👁️ <b>អ្វីដែលអតិថិជននឹងឃើញ (Customer-Facing Terms Preview) ៖</b>\n${buildReferralTermsText('km')}`;
 
     ctx.replyWithHTML(msg, getAdminReferralKeyboard());
 });
@@ -4819,6 +4846,18 @@ bot.hears([/✏️ · Edit Referred Bonus \(/i, 'Edit Referred Bonus'], (ctx) =>
         `🎗️ <b>កែប្រែ Referral Bonus សម្រាប់មិត្តភ័ក្តិថ្មី ($) ៖</b>\n\n` +
         `💰 ចំនួនបច្ចុប្បន្ន ៖ <b>$${referralBonusReferred.toFixed(2)} USD</b>\n\n` +
         `✍️ សូមវាយបញ្ចូលចំនួនទឹកប្រាក់ថ្មី (ឧទាហរណ៍ ៖ 1, 2.5, 5) — វាយ 0 ដើម្បីបិទ ៖`;
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// ✏️ EDIT MINIMUM QUALIFYING DEPOSIT
+bot.hears([/✏️ · Edit Min Deposit \(/i, 'Edit Min Deposit'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_REFERRAL_MIN_DEPOSIT' };
+    const prompt =
+        `🎗️ <b>កែប្រែចំនួន Deposit អប្បបរមា ដើម្បីមានសិទ្ធិទទួល Referral Bonus ($) ៖</b>\n\n` +
+        `💰 ចំនួនបច្ចុប្បន្ន ៖ <b>$${referralMinDeposit.toFixed(2)} USD</b>${referralMinDeposit <= 0 ? ' (គ្មានកំណត់ — Deposit ចំនួនណាក៏បាន)' : ''}\n\n` +
+        `✍️ សូមវាយបញ្ចូលចំនួនទឹកប្រាក់អប្បបរមាថ្មី (ឧទាហរណ៍ ៖ 1, 3, 5) — វាយ 0 ដើម្បីមិនកំណត់ ៖`;
     ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
 });
 
@@ -4988,11 +5027,17 @@ function saveDepositMode(mode) {
 let referralRewardMode = 'BOTH';
 let referralBonusReferrer = 0;
 let referralBonusReferred = 0;
+// Minimum deposit amount the referred friend's deposit must reach before
+// the bonus qualifies — closes off a cheap abuse path where a referred
+// account could deposit a trivial amount (e.g. $0.01) purely to farm a
+// bigger bonus. Defaults to $0 (no minimum) to match this feature's
+// existing "zero effect until Admin configures it" safety default.
+let referralMinDeposit = 0;
 
-// Persisted as one JSON blob under a single bot_settings key, rather than 3
-// scalar keys like depositMode/publicChannelId, since all 3 values are
-// always edited/read together. Declared here (after bootLoadAllConfigs is
-// already defined and called further up) so it's rehydrated immediately,
+// Persisted as one JSON blob under a single bot_settings key, rather than
+// separate scalar keys like depositMode/publicChannelId, since these values
+// are always edited/read together. Declared here (after bootLoadAllConfigs
+// is already defined and called further up) so it's rehydrated immediately,
 // invoked-and-.catch()'d right at its own declaration — same pattern
 // rehydrateDepositMode uses just above, for the same reason (these
 // variables don't exist yet at the point bootLoadAllConfigs itself runs).
@@ -5005,6 +5050,7 @@ async function rehydrateReferralSettings() {
         if (parsed.mode === 'BOTH' || parsed.mode === 'REFERRER_ONLY') referralRewardMode = parsed.mode;
         if (typeof parsed.referrerAmount === 'number' && parsed.referrerAmount >= 0) referralBonusReferrer = parsed.referrerAmount;
         if (typeof parsed.referredAmount === 'number' && parsed.referredAmount >= 0) referralBonusReferred = parsed.referredAmount;
+        if (typeof parsed.minDeposit === 'number' && parsed.minDeposit >= 0) referralMinDeposit = parsed.minDeposit;
         console.log('✅ Rehydrated referral settings from Supabase:', parsed);
     } catch (e) {
         console.error('⚠️ rehydrateReferralSettings error:', e.message);
@@ -5014,11 +5060,38 @@ rehydrateReferralSettings().catch(() => {});
 
 function saveReferralSettings() {
     if (!supabase) return;
-    const value = JSON.stringify({ mode: referralRewardMode, referrerAmount: referralBonusReferrer, referredAmount: referralBonusReferred });
+    const value = JSON.stringify({ mode: referralRewardMode, referrerAmount: referralBonusReferrer, referredAmount: referralBonusReferred, minDeposit: referralMinDeposit });
     supabase.from('bot_settings')
         .upsert([{ key: 'referral_settings', value, updated_at: new Date().toISOString() }], { onConflict: 'key' })
         .then(() => {})
         .catch(e => console.error('⚠️ saveReferralSettings error:', e.message));
+}
+
+// Bilingual Terms & Conditions text shown to customers (👤 Account & Profile
+// -> 🎗️ Refer a Friend) and previewed to Admin (🎗️ Referral Program) —
+// built fresh from the CURRENT live settings every time, never hardcoded,
+// so it can never drift out of sync after Admin changes an amount.
+function buildReferralTermsText(lang) {
+    const isKm = lang === 'km';
+    const lines = [];
+    if (isKm) {
+        lines.push(`📜 <b>លក្ខខណ្ឌទទួលបាន Bonus ៖</b>`);
+        lines.push(`• អ្នកទទួលបាន <b>$${referralBonusReferrer.toFixed(2)}</b> នៅពេលមិត្តភ័ក្តិដែលអ្នកបានណែនាំ ធ្វើការដាក់ប្រាក់ជាលើកដំបូងគេ${referralMinDeposit > 0 ? ` យ៉ាងតិច <b>$${referralMinDeposit.toFixed(2)}</b>` : ''} ដោយជោគជ័យ`);
+        if (referralRewardMode === 'BOTH' && referralBonusReferred > 0) {
+            lines.push(`• មិត្តភ័ក្តិដែលអ្នកណែនាំ ក៏ទទួលបាន <b>$${referralBonusReferred.toFixed(2)}</b> ជា Bonus ស្វាគមន៍ដែរ`);
+        }
+        lines.push(`• Bonus ផ្តល់ជូន <b>តែម្តងគត់</b> ក្នុងមួយមិត្តភ័ក្តិម្នាក់ៗ`);
+        lines.push(`• Link ប្រើបានតែសម្រាប់ <b>User ថ្មី</b> ដែលមិនធ្លាប់ចូល Bot ពីមុនប៉ុណ្ណោះ`);
+    } else {
+        lines.push(`📜 <b>Bonus Terms ៖</b>`);
+        lines.push(`• You earn <b>$${referralBonusReferrer.toFixed(2)}</b> when your referred friend makes their first deposit${referralMinDeposit > 0 ? ` of at least <b>$${referralMinDeposit.toFixed(2)}</b>` : ''} successfully`);
+        if (referralRewardMode === 'BOTH' && referralBonusReferred > 0) {
+            lines.push(`• Your referred friend also earns <b>$${referralBonusReferred.toFixed(2)}</b> as a welcome bonus`);
+        }
+        lines.push(`• The bonus is paid <b>only once</b> per referred friend`);
+        lines.push(`• The link only works for a <b>brand-new user</b> who hasn't used the bot before`);
+    }
+    return lines.join('\n');
 }
 
 let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
@@ -5154,6 +5227,7 @@ function getAdminReferralKeyboard() {
         [modeBtn],
         [`✏️ · Edit Referrer Bonus ($${referralBonusReferrer.toFixed(2)})`],
         [`✏️ · Edit Referred Bonus ($${referralBonusReferred.toFixed(2)})`],
+        [`✏️ · Edit Min Deposit ($${referralMinDeposit.toFixed(2)})`],
         ['📊 · Referral Stats'],
         ['🔐 Admin Menu']
     ]).resize();
@@ -6354,7 +6428,7 @@ bot.action(/^confirm_dep/, async (ctx) => {
         const currentBal = await getFreshBalance(userId);
         const newBal = currentBal + totalCredit;
         await dbUpdateBalance(userId, newBal);
-        await awardReferralBonusIfDue(userId);
+        await awardReferralBonusIfDue(userId, amount);
 
         if (supabase) {
             try {
@@ -6513,7 +6587,7 @@ bot.action(/^approve_dep/, async (ctx) => {
     const currentBal = await getFreshBalance(targetUserId);
     const newBal = currentBal + totalCredit;
     await dbUpdateBalance(targetUserId, newBal);
-    await awardReferralBonusIfDue(targetUserId);
+    await awardReferralBonusIfDue(targetUserId, amount);
 
     try {
         await ctx.answerCbQuery('✅ បញ្ចូលលុយជោគជ័យ!');
@@ -7678,7 +7752,7 @@ http.createServer(async (req, res) => {
                     const currentBal = await getFreshBalance(userId);
                     const newBal = currentBal + item.totalCredit;
                     await dbUpdateBalance(userId, newBal);
-                    await awardReferralBonusIfDue(userId);
+                    await awardReferralBonusIfDue(userId, item.amount);
 
                     if (supabase) {
                         try {

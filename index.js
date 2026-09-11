@@ -803,6 +803,103 @@ async function autoCreditDeposit(depId, item) {
     try {
         await bot.telegram.sendMessage(TARGET_ADMIN_CHAT_ID, channelMsg, { parse_mode: 'HTML' });
     } catch (e) {}
+
+    await awardReferralBonusIfDue(userId);
+}
+
+// 🎗️ REFERRAL PROGRAM — shared bonus-payout helper, called after every
+// single one of the 4 real deposit-credit paths in this file (this
+// function, confirm_dep_'s instant-approval branch, approve_dep_'s manual
+// admin approval, and the ABA PayWay webhook) so the "was this the
+// referred friend's first deposit, and if so pay the bonus" logic lives in
+// exactly one place — mirrors how finalizeOrder/refundOrder are each a
+// single shared helper reused by every caller instead of being duplicated
+// per channel.
+//
+// referralBonusReferrer/referralBonusReferred/referralRewardMode are
+// declared much further down in this file (near depositMode), but that's
+// safe here: this function is only ever CALLED at runtime, well after full
+// module evaluation (and therefore those declarations) has completed —
+// never at module-load time itself. Same reasoning already used for
+// publicChannelId elsewhere in this file.
+async function awardReferralBonusIfDue(referredUserId) {
+    // Resolve what would ACTUALLY get paid under the CURRENT mode/amounts
+    // before touching the database — e.g. if Admin set a referred-friend
+    // amount but left Reward Mode on "Referrer Only" (or left the referrer
+    // amount at $0), nothing would be paid. Bailing out here (rather than
+    // after the compare-and-swap below) matters: the swap is a ONE-TIME
+    // flag flip, so if we ran it anyway while paying $0, this referral
+    // would be permanently marked "bonus paid" and could never be paid for
+    // real even after Admin later fixes the settings.
+    const referrerAmount = referralBonusReferrer > 0 ? referralBonusReferrer : 0;
+    const referredAmount = (referralRewardMode === 'BOTH' && referralBonusReferred > 0) ? referralBonusReferred : 0;
+    if (referrerAmount <= 0 && referredAmount <= 0) return;
+
+    let referrerId = null;
+    if (supabase) {
+        try {
+            // DB-level compare-and-swap: only the first caller to see
+            // bonus_paid still false actually flips it (and gets a row back)
+            // — a second, concurrent deposit-credit call for the same
+            // referred user (e.g. admin manually approving while the
+            // auto-payment engine is also polling the same deposit) can
+            // never pay the bonus twice.
+            const { data, error } = await supabase
+                .from('referrals')
+                .update({
+                    bonus_paid: true,
+                    paid_at: new Date().toISOString(),
+                    referrer_bonus_amount: referrerAmount,
+                    referred_bonus_amount: referredAmount
+                })
+                .eq('referred_id', referredUserId)
+                .eq('bonus_paid', false)
+                .select('referrer_id')
+                .maybeSingle();
+            if (error || !data) return;
+            referrerId = data.referrer_id;
+        } catch (e) {
+            console.error('⚠️ awardReferralBonusIfDue error:', e.message);
+            return;
+        }
+    } else {
+        const rec = referralsMemory[referredUserId];
+        if (!rec || rec.bonusPaid) return;
+        rec.bonusPaid = true;
+        referrerId = rec.referrerId;
+    }
+
+    if (!referrerId) return;
+
+    if (referrerAmount > 0) {
+        try {
+            const refBal = await getFreshBalance(referrerId);
+            const refNewBal = refBal + referrerAmount;
+            await dbUpdateBalance(referrerId, refNewBal);
+            const refLang = getLang(referrerId);
+            const msg = refLang === 'en'
+                ? `🎗️ <b>Referral Bonus!</b>\n----------------------------------------\nYour referred friend just made their first deposit — you've earned <b>+$${referrerAmount.toFixed(2)} USD</b>! 🎉\n💰 New Balance: <b>$${refNewBal.toFixed(2)} USD</b>`
+                : `🎗️ <b>ទទួលបានរង្វាន់ណែនាំមិត្ត!</b>\n----------------------------------------\nមិត្តភ័ក្តិដែលបងបានណែនាំ ទើបតែបញ្ចូលប្រាក់ដំបូងគេ — បងទទួលបាន <b>+$${referrerAmount.toFixed(2)} USD</b> ចូល Wallet ហើយ! 🎉\n💰 តុល្យភាពថ្មី ៖ <b>$${refNewBal.toFixed(2)} USD</b>`;
+            await bot.telegram.sendMessage(referrerId, msg, { parse_mode: 'HTML' });
+        } catch (e) {
+            console.error('⚠️ Could not credit/notify referrer:', e.message);
+        }
+    }
+
+    if (referredAmount > 0) {
+        try {
+            const curBal = await getFreshBalance(referredUserId);
+            const newBal = curBal + referredAmount;
+            await dbUpdateBalance(referredUserId, newBal);
+            const lang = getLang(referredUserId);
+            const msg = lang === 'en'
+                ? `🎗️ <b>Welcome Bonus!</b>\n----------------------------------------\nThanks for joining via a friend's referral link — you've earned an extra <b>+$${referredAmount.toFixed(2)} USD</b>! 🎉\n💰 New Balance: <b>$${newBal.toFixed(2)} USD</b>`
+                : `🎗️ <b>ទទួលបានរង្វាន់ស្វាគមន៍!</b>\n----------------------------------------\nអរគុណដែលបានចូលរួមតាមរយៈ Link ណែនាំរបស់មិត្តភ័ក្តិ — អ្នកទទួលបានបន្ថែម <b>+$${referredAmount.toFixed(2)} USD</b> ចូល Wallet! 🎉\n💰 តុល្យភាពថ្មី ៖ <b>$${newBal.toFixed(2)} USD</b>`;
+            await bot.telegram.sendMessage(referredUserId, msg, { parse_mode: 'HTML' });
+        } catch (e) {
+            console.error('⚠️ Could not credit/notify referred user:', e.message);
+        }
+    }
 }
 
 let autoPayInterval = null;
@@ -1059,6 +1156,68 @@ async function dbUpdateLanguage(userId, lang) {
             .eq('telegram_id', userId);
     } catch (err) {
         console.error('⚠️ dbUpdateLanguage error:', err.message);
+    }
+}
+
+// 🎗️ REFERRAL PROGRAM — see database.sql's public.referrals for the schema
+// and awardReferralBonusIfDue (near autoCreditDeposit) for how/when the
+// bonus actually gets paid. This block only concerns *recording* the
+// referrer↔referred relationship at signup.
+
+// In-memory fallback used only when Supabase isn't configured — mirrors how
+// every other db* helper in this file degrades to memory-only persistence.
+const referralsMemory = {}; // { [referredId]: { referrerId, bonusPaid } }
+
+// Checked BEFORE dbGetUser() runs (which would otherwise create the row and
+// make every user look "existing") so bot.start can tell a genuinely
+// brand-new user apart from a returning one re-tapping an old referral link
+// they had saved — only a brand-new user's /start should ever create a
+// referral record.
+async function userExistsAlready(userId) {
+    if (userBalances[userId] !== undefined) return true;
+    if (!supabase) return false;
+    try {
+        const { data } = await supabase.from('users').select('telegram_id').eq('telegram_id', userId).maybeSingle();
+        return !!data;
+    } catch (e) {
+        return false;
+    }
+}
+
+// Called once, from bot.start, only for a user we've just confirmed is
+// brand-new. Silently no-ops on self-referral, a nonexistent/garbage
+// referrer ID, or a referral that (via some race) already got recorded —
+// none of those are worth bothering Admin or the user about.
+async function recordReferralIfNew(referredId, referrerId) {
+    if (!referrerId || referrerId === referredId) return;
+
+    if (!supabase) {
+        if (!referralsMemory[referredId]) {
+            referralsMemory[referredId] = { referrerId, bonusPaid: false };
+        }
+        return;
+    }
+
+    try {
+        // The referrer must be a real, already-registered user — otherwise a
+        // ?start=ref_<madeUpNumber> link could register a referral for an
+        // account that doesn't exist (and could never receive the bonus).
+        const { data: referrerRow } = await supabase.from('users').select('telegram_id').eq('telegram_id', referrerId).maybeSingle();
+        if (!referrerRow) return;
+
+        const { error } = await supabase.from('referrals').insert([{ referrer_id: referrerId, referred_id: referredId }]);
+        if (error) {
+            // referred_id is UNIQUE — a duplicate-key error here just means
+            // this got recorded already (e.g. a retried /start); not a real
+            // problem worth logging loudly.
+            if (!/duplicate|unique/i.test(error.message || '')) {
+                console.error('⚠️ recordReferralIfNew insert error:', error.message);
+            }
+            return;
+        }
+        console.log(`✅ Recorded referral: ${referrerId} → ${referredId}`);
+    } catch (e) {
+        console.error('⚠️ recordReferralIfNew error:', e.message);
     }
 }
 
@@ -2219,8 +2378,22 @@ bot.start(async (ctx) => {
     delete userState[userId];
     const firstName = ctx.from.first_name || 'User';
 
+    // 🎗️ Referral tracking — must check BEFORE dbGetUser() runs, since that
+    // call creates the user row and would make every user look "existing"
+    // afterward. Only a brand-new user's ?start=ref_<id> payload should ever
+    // be recorded — a returning user re-tapping an old saved referral link
+    // must never re-trigger anything.
+    const isNewUser = !(await userExistsAlready(userId));
+
     // Initialize user in Database if available
     await dbGetUser(userId, firstName, ctx.from.username);
+
+    if (isNewUser) {
+        const payloadMatch = (ctx.startPayload || '').trim().match(/^ref_(\d+)$/);
+        if (payloadMatch) {
+            await recordReferralIfNew(userId, parseInt(payloadMatch[1]));
+        }
+    }
 
     return ctx.replyWithHTML(
         `Welcome, <b>${firstName}</b>! Please select your language / សូមជ្រើសរើសភាសា ៖`,
@@ -2321,6 +2494,9 @@ async function sendAccountProfileCard(ctx) {
             Markup.button.callback(lang === 'km' ? '📦 ប្រវត្តិទិញ (Orders)' : '📦 Order History', 'profile_my_orders')
         ],
         [
+            Markup.button.callback(lang === 'km' ? '🎗️ ណែនាំមិត្ត (Referral)' : '🎗️ Refer a Friend', 'profile_referral')
+        ],
+        [
             Markup.button.webApp(lang === 'km' ? `🌐 បើក ${BRAND_NAME} Website Portal ⚡` : `🌐 Open ${BRAND_NAME} Website Portal ⚡`, websiteUrl)
         ]
     ]);
@@ -2354,6 +2530,40 @@ bot.action('profile_add_funds', (ctx) => {
 bot.action('profile_my_orders', async (ctx) => {
     try { await ctx.answerCbQuery(); } catch (e) {}
     return sendMyOrdersHistory(ctx);
+});
+
+// 🎗️ REFERRAL PROGRAM — shows the user's personal referral link + stats
+bot.action('profile_referral', async (ctx) => {
+    try { await ctx.answerCbQuery(); } catch (e) {}
+    const userId = ctx.from.id;
+    const lang = getLang(userId);
+    const botUsername = (bot.botInfo && bot.botInfo.username) || 'BlessingKhV1_Bot';
+    const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+
+    let referredCount = 0;
+    let bonusEarned = 0;
+    if (supabase) {
+        try {
+            const { count } = await supabase.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', userId);
+            referredCount = count || 0;
+            const { data: paidRows } = await supabase.from('referrals').select('referrer_bonus_amount').eq('referrer_id', userId).eq('bonus_paid', true);
+            bonusEarned = (paidRows || []).reduce((sum, r) => sum + parseFloat(r.referrer_bonus_amount || 0), 0);
+        } catch (e) {}
+    }
+
+    const msg = lang === 'km'
+        ? `🎗️ <b>កម្មវិធីណែនាំមិត្ត (Referral Program)</b>\n----------------------------------------\n\n` +
+          `ចែក Link ខាងក្រោមទៅមិត្តភ័ក្តិ! នៅពេលគាត់ចុះឈ្មោះ ហើយបញ្ចូលប្រាក់ដំបូងគេ អ្នកនឹងទទួលបាន Bonus ចូល Wallet ភ្លាមៗ! 🎉\n\n` +
+          `🔗 <b>Link ណែនាំរបស់អ្នក ៖</b>\n<code>${referralLink}</code>\n\n` +
+          `👥 <b>ចំនួនមិត្តភ័ក្តិបានណែនាំ ៖</b> ${referredCount}\n` +
+          `💰 <b>Bonus ទទួលបានសរុប ៖</b> $${bonusEarned.toFixed(2)} USD`
+        : `🎗️ <b>Referral Program</b>\n----------------------------------------\n\n` +
+          `Share your link below! When a friend joins and makes their first deposit, you get a bonus in your Wallet instantly! 🎉\n\n` +
+          `🔗 <b>Your Referral Link:</b>\n<code>${referralLink}</code>\n\n` +
+          `👥 <b>Friends Referred:</b> ${referredCount}\n` +
+          `💰 <b>Total Bonus Earned:</b> $${bonusEarned.toFixed(2)} USD`;
+
+    return ctx.replyWithHTML(msg, { disable_web_page_preview: true });
 });
 
 // 👛 ADD FUNDS / WALLET
@@ -3138,6 +3348,28 @@ bot.on('text', async (ctx, next) => {
             }
             bonusMinDeposit = val;
             return ctx.replyWithHTML(`✅ <b>បានកែប្រែប្រាក់ Deposit ទាបបំផុតសម្រាប់ទទួលបាន Bonus ទៅជា $${bonusMinDeposit.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminPromoKeyboard());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_REFERRAL_REFERRER_AMOUNT') {
+            delete userState[userId];
+            const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+            if (isNaN(val) || val < 0) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>', getAdminReferralKeyboard());
+            }
+            referralBonusReferrer = val;
+            saveReferralSettings();
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Referral Bonus សម្រាប់អ្នកណែនាំទៅជា $${referralBonusReferrer.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminReferralKeyboard());
+        }
+
+        if (state.step === 'AWAITING_ADMIN_SET_REFERRAL_REFERRED_AMOUNT') {
+            delete userState[userId];
+            const val = parseFloat(text.replace(/[^0-9.]/g, ''));
+            if (isNaN(val) || val < 0) {
+                return ctx.replyWithHTML('❌ <b>ចំនួនទឹកប្រាក់មិនត្រឹមត្រូវ!</b>', getAdminReferralKeyboard());
+            }
+            referralBonusReferred = val;
+            saveReferralSettings();
+            return ctx.replyWithHTML(`✅ <b>បានកែប្រែ Referral Bonus សម្រាប់មិត្តភ័ក្តិថ្មីទៅជា $${referralBonusReferred.toFixed(2)} USD ដោយជោគជ័យ!</b>`, getAdminReferralKeyboard());
         }
 
         if (state.step === 'AWAITING_ADMIN_EDIT_PRICE_INPUT') {
@@ -4517,6 +4749,90 @@ bot.hears([/🎁 Bonus \(/i, /🎁 Bonus/i], (ctx) => {
     ctx.replyWithHTML(`✅ <b>Bonus Promotion is now ${isBonusPromoOn ? 'ENABLED' : 'DISABLED'}!</b>`, getAdminPromoKeyboard());
 });
 
+// 🎗️ REFERRAL PROGRAM MENU
+bot.hears(['🎗️ Referral Program', 'Referral Program'], (ctx) => {
+    const userId = ctx.from.id;
+    delete userState[userId];
+    if (!isAdmin(userId)) return;
+
+    const modeStr = referralRewardMode === 'BOTH'
+        ? '👥 <b>Both</b> (Referrer + New Friend)'
+        : '👤 <b>Referrer Only</b>';
+    const statusStr = (referralBonusReferrer > 0 || referralBonusReferred > 0)
+        ? '🟢 <b>Active</b>'
+        : '🔴 <b>Inactive (both amounts are $0)</b>';
+
+    const msg =
+        `🎗️ ━━━━━━━ [ <b>REFERRAL PROGRAM</b> ] ━━━━━━━ 🎗️\n\n` +
+        `Users share a personal link (from 👤 Account & Profile); when the friend they invite makes their FIRST deposit, the bonus is paid instantly ៖\n\n` +
+        `• <b>Status:</b> ${statusStr}\n` +
+        `• <b>Reward Mode:</b> ${modeStr}\n` +
+        `• <b>Referrer Bonus:</b> <b>$${referralBonusReferrer.toFixed(2)} USD</b>\n` +
+        `• <b>Referred Friend Bonus:</b> <b>$${referralBonusReferred.toFixed(2)} USD</b>${referralRewardMode === 'REFERRER_ONLY' ? ' <i>(not paid — mode is Referrer Only)</i>' : ''}`;
+
+    ctx.replyWithHTML(msg, getAdminReferralKeyboard());
+});
+
+// 🎗️ TOGGLE REWARD MODE (Both vs Referrer Only)
+bot.hears([/🎗️ Reward Mode:/i], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    referralRewardMode = referralRewardMode === 'BOTH' ? 'REFERRER_ONLY' : 'BOTH';
+    saveReferralSettings();
+    const modeStr = referralRewardMode === 'BOTH' ? '👥 Both (Referrer + Friend)' : '👤 Referrer Only';
+    ctx.replyWithHTML(`✅ <b>Referral Reward Mode changed to: ${modeStr}</b>`, getAdminReferralKeyboard());
+});
+
+// ✏️ EDIT REFERRER BONUS AMOUNT
+bot.hears([/✏️ · Edit Referrer Bonus \(/i, 'Edit Referrer Bonus'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_REFERRAL_REFERRER_AMOUNT' };
+    const prompt =
+        `🎗️ <b>កែប្រែ Referral Bonus សម្រាប់អ្នកណែនាំ ($) ៖</b>\n\n` +
+        `💰 ចំនួនបច្ចុប្បន្ន ៖ <b>$${referralBonusReferrer.toFixed(2)} USD</b>\n\n` +
+        `✍️ សូមវាយបញ្ចូលចំនួនទឹកប្រាក់ថ្មី (ឧទាហរណ៍ ៖ 1, 2.5, 5) — វាយ 0 ដើម្បីបិទ ៖`;
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// ✏️ EDIT REFERRED-FRIEND BONUS AMOUNT
+bot.hears([/✏️ · Edit Referred Bonus \(/i, 'Edit Referred Bonus'], (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+    userState[userId] = { step: 'AWAITING_ADMIN_SET_REFERRAL_REFERRED_AMOUNT' };
+    const prompt =
+        `🎗️ <b>កែប្រែ Referral Bonus សម្រាប់មិត្តភ័ក្តិថ្មី ($) ៖</b>\n\n` +
+        `💰 ចំនួនបច្ចុប្បន្ន ៖ <b>$${referralBonusReferred.toFixed(2)} USD</b>\n\n` +
+        `✍️ សូមវាយបញ្ចូលចំនួនទឹកប្រាក់ថ្មី (ឧទាហរណ៍ ៖ 1, 2.5, 5) — វាយ 0 ដើម្បីបិទ ៖`;
+    ctx.replyWithHTML(prompt, Markup.keyboard([['🔐 Admin Menu']]).resize());
+});
+
+// 📊 REFERRAL STATS
+bot.hears(['📊 · Referral Stats', 'Referral Stats'], async (ctx) => {
+    const userId = ctx.from.id;
+    if (!isAdmin(userId)) return;
+
+    if (!supabase) {
+        return ctx.replyWithHTML('⚠️ <b>Supabase មិនទាន់កំណត់រចនាសម្ព័ន្ធទេ — មិនអាចបង្ហាញស្ថិតិបានទេ។</b>', getAdminReferralKeyboard());
+    }
+    try {
+        const { count: totalReferrals } = await supabase.from('referrals').select('*', { count: 'exact', head: true });
+        const { data: paidRows } = await supabase.from('referrals').select('referrer_bonus_amount, referred_bonus_amount').eq('bonus_paid', true);
+        const paidCount = (paidRows || []).length;
+        const totalPaidOut = (paidRows || []).reduce((sum, r) => sum + parseFloat(r.referrer_bonus_amount || 0) + parseFloat(r.referred_bonus_amount || 0), 0);
+
+        const msg =
+            `📊 ━━━━━━━ [ <b>REFERRAL STATS</b> ] ━━━━━━━ 📊\n\n` +
+            `👥 <b>អ្នកចូលរួមសរុប (Signed Up via Referral):</b> ${totalReferrals || 0}\n` +
+            `✅ <b>បានបញ្ចូលប្រាក់ដំបូង & ទទួល Bonus:</b> ${paidCount}\n` +
+            `💸 <b>ទឹកប្រាក់ Bonus ចេញសរុប:</b> $${totalPaidOut.toFixed(2)} USD`;
+        return ctx.replyWithHTML(msg, getAdminReferralKeyboard());
+    } catch (e) {
+        console.error('⚠️ Referral Stats error:', e.message);
+        return ctx.replyWithHTML('⚠️ <b>មានបញ្ហាក្នុងការទាញយកស្ថិតិ។</b>', getAdminReferralKeyboard());
+    }
+});
+
 // Dynamic Group & Channel Chat ID Auto-Catcher
 let autoDetectedGroupId = null;
 let detectedChannelChatId = process.env.BROADCAST_CHANNEL_ID || process.env.CHANNEL_CHAT_ID || -1003926070646;
@@ -4646,6 +4962,50 @@ function saveDepositMode(mode) {
         .then(() => {})
         .catch(e => console.error('⚠️ saveDepositMode error:', e.message));
 }
+
+// 🎗️ REFERRAL PROGRAM SETTINGS — Admin-editable via "🎗️ Referral Program"
+// below. Both amounts default to $0 (feature has zero financial effect
+// until Admin explicitly sets one) so enabling this code path can never by
+// itself start paying out money on a live, real-money system.
+// 'BOTH' = referrer AND the new referred friend both get a bonus;
+// 'REFERRER_ONLY' = only the referrer does (referralBonusReferred is kept
+// but ignored while this mode is active — see awardReferralBonusIfDue).
+let referralRewardMode = 'BOTH';
+let referralBonusReferrer = 0;
+let referralBonusReferred = 0;
+
+// Persisted as one JSON blob under a single bot_settings key, rather than 3
+// scalar keys like depositMode/publicChannelId, since all 3 values are
+// always edited/read together. Declared here (after bootLoadAllConfigs is
+// already defined and called further up) so it's rehydrated immediately,
+// invoked-and-.catch()'d right at its own declaration — same pattern
+// rehydrateDepositMode uses just above, for the same reason (these
+// variables don't exist yet at the point bootLoadAllConfigs itself runs).
+async function rehydrateReferralSettings() {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('bot_settings').select('value').eq('key', 'referral_settings').maybeSingle();
+        if (error || !data || !data.value) return;
+        const parsed = JSON.parse(data.value);
+        if (parsed.mode === 'BOTH' || parsed.mode === 'REFERRER_ONLY') referralRewardMode = parsed.mode;
+        if (typeof parsed.referrerAmount === 'number' && parsed.referrerAmount >= 0) referralBonusReferrer = parsed.referrerAmount;
+        if (typeof parsed.referredAmount === 'number' && parsed.referredAmount >= 0) referralBonusReferred = parsed.referredAmount;
+        console.log('✅ Rehydrated referral settings from Supabase:', parsed);
+    } catch (e) {
+        console.error('⚠️ rehydrateReferralSettings error:', e.message);
+    }
+}
+rehydrateReferralSettings().catch(() => {});
+
+function saveReferralSettings() {
+    if (!supabase) return;
+    const value = JSON.stringify({ mode: referralRewardMode, referrerAmount: referralBonusReferrer, referredAmount: referralBonusReferred });
+    supabase.from('bot_settings')
+        .upsert([{ key: 'referral_settings', value, updated_at: new Date().toISOString() }], { onConflict: 'key' })
+        .then(() => {})
+        .catch(e => console.error('⚠️ saveReferralSettings error:', e.message));
+}
+
 let mode1CustomQrFileId = null; // Custom uploaded Mode 1 QR photo file ID
 let customHowToOrderVideoId = null; // Custom uploaded how-to-order video file ID
 let privacyTutorialVideoId = null; // Custom uploaded "make your account/link public" tutorial video file ID — sent alongside the "🔒 Private" Other Reason preset
@@ -4688,8 +5048,9 @@ let paywayMerchantLink = process.env.PAYWAY_LINK || 'https://link.payway.com.kh/
 function getAdminMainKeyboard() {
     return Markup.keyboard([
         ['🎵 Users & Balances', '⚙️ Bot Settings'],
-        ['🎁 Promotion Settings', '📊 Analytics & Reports'],
-        ['🛠️ Tools & System', isBotOpen ? '🟢 · Bot: open' : '🔴 · Bot: maintenance'],
+        ['🎁 Promotion Settings', '🎗️ Referral Program'],
+        ['📊 Analytics & Reports', '🛠️ Tools & System'],
+        [isBotOpen ? '🟢 · Bot: open' : '🔴 · Bot: maintenance'],
         ['👥 · Manage Admins', '💼 · Manage Resellers'],
         ['💸 · Exit to user']
     ]).resize();
@@ -4704,6 +5065,20 @@ function getAdminPromoKeyboard() {
         [promoBtn],
         ['✏️ · Edit Bonus Rate (%)', '💵 · Edit Min Bonus Deposit ($)'],
         [`✏️ · Edit Reseller Discount (${resellerDiscountPercent}%)`],
+        ['🔐 Admin Menu']
+    ]).resize();
+}
+
+function getAdminReferralKeyboard() {
+    const modeBtn = referralRewardMode === 'BOTH'
+        ? '🎗️ Reward Mode: 👥 Both (Referrer + Friend)'
+        : '🎗️ Reward Mode: 👤 Referrer Only';
+
+    return Markup.keyboard([
+        [modeBtn],
+        [`✏️ · Edit Referrer Bonus ($${referralBonusReferrer.toFixed(2)})`],
+        [`✏️ · Edit Referred Bonus ($${referralBonusReferred.toFixed(2)})`],
+        ['📊 · Referral Stats'],
         ['🔐 Admin Menu']
     ]).resize();
 }
@@ -5756,6 +6131,7 @@ bot.action(/^confirm_dep/, async (ctx) => {
         const currentBal = await getFreshBalance(userId);
         const newBal = currentBal + totalCredit;
         await dbUpdateBalance(userId, newBal);
+        await awardReferralBonusIfDue(userId);
 
         if (supabase) {
             try {
@@ -5914,6 +6290,7 @@ bot.action(/^approve_dep/, async (ctx) => {
     const currentBal = await getFreshBalance(targetUserId);
     const newBal = currentBal + totalCredit;
     await dbUpdateBalance(targetUserId, newBal);
+    await awardReferralBonusIfDue(targetUserId);
 
     try {
         await ctx.answerCbQuery('✅ បញ្ចូលលុយជោគជ័យ!');
@@ -7078,6 +7455,7 @@ http.createServer(async (req, res) => {
                     const currentBal = await getFreshBalance(userId);
                     const newBal = currentBal + item.totalCredit;
                     await dbUpdateBalance(userId, newBal);
+                    await awardReferralBonusIfDue(userId);
 
                     if (supabase) {
                         try {

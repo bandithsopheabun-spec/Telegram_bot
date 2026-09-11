@@ -82,3 +82,28 @@ CREATE TABLE IF NOT EXISTS public.problem_tickets (
 CREATE INDEX IF NOT EXISTS idx_problem_tickets_telegram_id ON public.problem_tickets(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_problem_tickets_order_id ON public.problem_tickets(order_id);
 CREATE INDEX IF NOT EXISTS idx_problem_tickets_preset_key ON public.problem_tickets(preset_key);
+
+-- 6. Referrals Table — one row per (referrer, referred-friend) pair, created
+-- the first time a brand-new user starts the bot via a
+-- https://t.me/<bot>?start=ref_<referrerId> link (see recordReferralIfNew in
+-- index.js). bonus_paid flips to true exactly once, guarded by a DB-level
+-- compare-and-swap (UPDATE ... WHERE bonus_paid = false) in
+-- awardReferralBonusIfDue, when the referred friend's FIRST deposit is
+-- credited through ANY of the 4 deposit-approval paths (manual admin
+-- approve, instant auto-approval, the auto-payment engine/khqr.cc webhook,
+-- or the PayWay webhook) — never on signup alone, so an empty account can't
+-- be farmed for free bonuses. referrer_bonus_amount/referred_bonus_amount
+-- snapshot whatever Admin had configured at the moment the bonus was paid,
+-- for an accurate historical/audit trail even after Admin later changes the
+-- live rate.
+CREATE TABLE IF NOT EXISTS public.referrals (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    referrer_id BIGINT NOT NULL,
+    referred_id BIGINT NOT NULL UNIQUE,
+    bonus_paid BOOLEAN NOT NULL DEFAULT false,
+    referrer_bonus_amount NUMERIC(10,2),
+    referred_bonus_amount NUMERIC(10,2),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    paid_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON public.referrals(referrer_id);

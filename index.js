@@ -5255,12 +5255,28 @@ function escapeHtml(str) {
     return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Fixed, always-included "how to actually use this" footer — Admin's own
+// announcement text explains WHY to refer a friend (the bonus), but never
+// explained WHAT to physically do with the link once they have it. Always
+// appended (not admin-editable) so every announcement, regardless of what
+// Admin types, walks the recipient through the 3 concrete steps.
+function buildReferralHowToText() {
+    return (
+        `📌 <b>របៀបប្រើ Link ណែនាំ ៖</b>\n` +
+        `1️⃣ ចម្លង Link ខាងលើ\n` +
+        `2️⃣ ផ្ញើទៅមិត្តភ័ក្តិ តាម Messenger, Telegram, Facebook ឬ SMS\n` +
+        `3️⃣ ពេលមិត្តភ័ក្តិចុច Link ចូល Bot ហើយបញ្ចូលប្រាក់ដំបូងគេ អ្នកនឹងទទួលបាន Bonus ចូល Wallet ភ្លាមៗ! 🎉`
+    );
+}
+
 function buildReferralAnnouncementFor(userId) {
     const link = buildReferralLink(userId);
+    const howTo = buildReferralHowToText();
     const rawTemplate = referralAnnouncementText || '';
-    if (!rawTemplate) return `🔗 ${link}`;
+    if (!rawTemplate) return `🔗 ${link}\n\n${howTo}`;
     const template = escapeHtml(rawTemplate);
-    return template.includes('{link}') ? template.split('{link}').join(link) : `${template}\n\n🔗 ${link}`;
+    const body = template.includes('{link}') ? template.split('{link}').join(link) : `${template}\n\n🔗 ${link}`;
+    return `${body}\n\n${howTo}`;
 }
 
 function getAdminReferralAnnouncementKeyboard() {
